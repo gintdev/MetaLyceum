@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: metalyceum-db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-metalyceum}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./migrations:/docker-entrypoint-initdb.d/migrations
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - metalyceum
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: metalyceum-qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    networks:
+      - metalyceum
+volumes:
+  postgres_data:
+  qdrant_data:
+
+networks:
+  metalyceum:
+    driver: bridge

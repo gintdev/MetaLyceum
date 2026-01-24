@@ -14,6 +14,7 @@ class ArticleCreate(BaseModel):
     file_name: Optional[str] = Field(None, max_length=512, description="Имя файла")
     download_url: Optional[str] = Field(None, max_length=2048, description="URL для скачивания")
     parsed_at: Optional[datetime] = Field(None, description="Время парсинга")
+    process: bool = Field(True, description="Обработать для RAG сразу же (по умолчанию True)")
 
     class Config:
         json_schema_extra = {
@@ -26,7 +27,8 @@ class ArticleCreate(BaseModel):
                 "published_year": 1781,
                 "file_name": "kritika_chystogo_razuma.pdf",
                 "download_url": "https://example.com/files/kritika.pdf",
-                "parsed_at": datetime.now()
+                "parsed_at": datetime.now(),
+                "process": True
             }
         }
 
@@ -69,3 +71,80 @@ class ArticleListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ArticleCreateResponse(BaseModel):
+    """Ответ при создании статьи с опциональной информацией об обработке"""
+    article: ArticleResponse
+    processing: bool = Field(description="Статья обрабатывается в фоне")
+    message: Optional[str] = None
+
+
+# ===== RAG Schemas =====
+
+class ProcessArticleRequest(BaseModel):
+    """Запрос на обработку статьи для RAG"""
+    article_id: int = Field(..., description="ID статьи для обработки")
+    filename: str = Field(..., description="Имя файла на Яндекс Диске")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "article_id": 1,
+                "filename": "kritika_chystogo_razuma.pdf"
+            }
+        }
+
+
+class ProcessArticleResponse(BaseModel):
+    """Ответ на обработку статьи"""
+    article_id: int
+    filename: str
+    text_length: int
+    chunks_count: int
+    embeddings_count: int
+    stored_points: int
+    point_ids: List[str]
+    status: str
+
+
+class SearchRequest(BaseModel):
+    """Запрос на поиск в RAG"""
+    query: str = Field(..., min_length=1, max_length=2048, description="Поисковый запрос")
+    article_id: Optional[int] = Field(None, description="ID статьи для фильтрации (опционально)")
+    limit: int = Field(5, ge=1, le=100, description="Количество результатов")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "query": "Что такое трансцендентальная логика?",
+                "article_id": None,
+                "limit": 5
+            }
+        }
+
+
+class ChunkResult(BaseModel):
+    """Результат поиска - найденный чанк"""
+    id: str
+    score: float
+    article_id: int
+    filename: str
+    chunk_index: int
+    chunk_text: str
+    chunk_size: int
+
+
+class SearchResponse(BaseModel):
+    """Ответ на запрос поиска"""
+    query: str
+    results: List[ChunkResult]
+    count: int
+    article_id: Optional[int] = None
+
+
+class VectorStoreInfo(BaseModel):
+    """Информация о векторной БД"""
+    name: str
+    documents_count: int
+    points_count: int

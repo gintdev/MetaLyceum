@@ -22,10 +22,25 @@ class Settings(BaseSettings):
     # RAG / Vector DB
     QDRANT_URL: str = "http://localhost:6333"
     QDRANT_PORT: Optional[int] = 6333
+    QDRANT_COLLECTION_NAME: str = "philosophy_texts"
+    
+    # OpenAI API
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_MODEL: str = "text-embedding-3-small"
+    OPENAI_EMBEDDING_DIMENSIONS: int = 1536
+    OPENAI_QUANTIZATION: str = "float"  # 'float' или 'binary'
+    
+    # RAG Configuration
+    CHUNK_SIZE: int = 1024  # размер чанка в токенах
+    CHUNK_OVERLAP: int = 100  # перекрытие между чанками
+    SEARCH_LIMIT: int = 5  # количество найденных документов для RAG
 
     # Yandex.Disk
     YADISK_TOKEN: Optional[str] = None
     YADISK_FOLDER: str = "MetaLyceum"
+    
+    # File processing
+    PDF_TEMP_DIR: str = "/tmp/metalyceum_pdf"
 
     model_config = {
         "env_file": ".env",

@@ -5,6 +5,9 @@ lxml>=4.9.0
 requests>=2.25.1
 random-user-agent>=1.0.1
 
+# Работа с PDF
+PyPDF2>=3.0.0
+
 # Работа с Яндекс.Диском
 yadisk>=1.2.14
 
@@ -40,3 +43,5 @@ async_openai>=0.0.52
 
 numpy >=1.24.3
 backoff>=2.2.1
+
+aiofiles >=23.1.0

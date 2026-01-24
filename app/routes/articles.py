@@ -1,29 +1,36 @@
 from sqlalchemy.exc import IntegrityError
 from typing import List, Annotated
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+import asyncio
+from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.models.article import Article
-from app.schemas import ArticleCreate, ArticleUpdate, ArticleResponse, ArticleListResponse
+from app.schemas import (
+    ArticleCreate, ArticleUpdate, ArticleResponse, ArticleListResponse, ArticleCreateResponse,
+    ProcessArticleRequest, ProcessArticleResponse,
+    SearchRequest, SearchResponse, ChunkResult, VectorStoreInfo
+)
+from app.services.rag import get_rag_service
 
 router = APIRouter(prefix="/articles", tags=["articles"])
 
 
 @router.post(
     "/",
-    response_model=ArticleResponse,
+    response_model=ArticleCreateResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Создать новую статью",
-    description="Создает новую статью с метаданными по философии"
+    description="Создает новую статью с метаданными по философии и опционально обрабатывает её для RAG"
 )
 async def create_article(
     article: ArticleCreate,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db)
-) -> ArticleResponse:
+) -> ArticleCreateResponse:
     """
-    Создает новую статью в базе данных.
+    Создает новую статью в базе данных и опционально запускает обработку для RAG.
     
     - **title**: название статьи (обязательно)
     - **source**: источник статьи (обязательно)
@@ -31,16 +38,49 @@ async def create_article(
     - **authors**: список авторов
     - **keywords**: ключевые слова
     - **published_year**: год публикации
-    - **file_name**: имя файла
+    - **file_name**: имя файла на Яндекс Диске
     - **download_url**: URL для скачивания
     - **parsed_at**: время парсинга
+    - **process**: обработать для RAG сразу же (по умолчанию True)
     """
     try:
-        db_article = Article(**article.model_dump())
+        # Сохранить метаданные статьи
+        article_data = article.model_dump(exclude={'process'})
+        db_article = Article(**article_data)
         session.add(db_article)
         await session.commit()
         await session.refresh(db_article)
-        return ArticleResponse.model_validate(db_article)
+        
+        article_response = ArticleResponse.model_validate(db_article)
+        processing = False
+        message = None
+        
+        # Если требуется обработка и есть имя файла
+        if article.process and article.file_name:
+            processing = True
+            message = f"Статья сохранена и запущена фоновая обработка для RAG"
+            
+            # Запустить обработку в фоне
+            async def process_in_background():
+                try:
+                    rag_service = await get_rag_service()
+                    await rag_service.process_article(db_article.id, article.file_name)
+                except Exception as e:
+                    print(f"❌ Ошибка при фоновой обработке статьи {db_article.id}: {str(e)}")
+            
+            # Добавить фоновую задачу
+            background_tasks.add_task(process_in_background)
+        elif article.process and not article.file_name:
+            message = "Статья сохранена. Обработка для RAG требует file_name"
+        else:
+            message = "Статья сохранена (обработка для RAG отключена)"
+        
+        return ArticleCreateResponse(
+            article=article_response,
+            processing=processing,
+            message=message
+        )
+        
     except IntegrityError as e:
         await session.rollback()
         raise HTTPException(
@@ -195,4 +235,211 @@ async def delete_article(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Ошибка при удалении статьи"
+        )
+
+
+# ===== RAG Endpoints =====
+
+@router.post(
+    "/{article_id}/process",
+    response_model=ProcessArticleResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Обработать статью для RAG",
+    description="Скачивает PDF, парсит текст, создает embedding и сохраняет в Qdrant"
+)
+async def process_article_for_rag(
+    article_id: int,
+    request: ProcessArticleRequest,
+    session: AsyncSession = Depends(get_db)
+) -> ProcessArticleResponse:
+    """
+    Обработка статьи для RAG системы:
+    1. Скачивание PDF с Яндекс Диска
+    2. Извлечение текста из PDF
+    3. Разбиение текста на чанки
+    4. Генерирование embedding-ов с OpenAI
+    5. Сохранение в векторную БД Qdrant
+    
+    - **article_id**: ID статьи в PostgreSQL БД
+    - **filename**: Имя файла на Яндекс Диске
+    """
+    try:
+        # Проверить что статья существует
+        result = await session.execute(select(Article).where(Article.id == article_id))
+        article = result.scalar_one_or_none()
+        
+        if not article:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Статья с ID {article_id} не найдена"
+            )
+        
+        # Получить RAG сервис и обработать статью
+        rag_service = await get_rag_service()
+        result = await rag_service.process_article(article_id, request.filename)
+        
+        return ProcessArticleResponse(**result)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при обработке статьи: {str(e)}"
+        )
+
+
+@router.post(
+    "/{article_id}/reprocess",
+    response_model=ProcessArticleResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Переобработать статью",
+    description="Удаляет старые данные и переобрабатывает статью"
+)
+async def reprocess_article_for_rag(
+    article_id: int,
+    request: ProcessArticleRequest,
+    session: AsyncSession = Depends(get_db)
+) -> ProcessArticleResponse:
+    """
+    Переобработка статьи (удаление старых векторов + новая обработка).
+    Используйте когда нужно обновить embeddings статьи.
+    
+    - **article_id**: ID статьи в PostgreSQL БД
+    - **filename**: Имя файла на Яндекс Диске
+    """
+    try:
+        # Проверить что статья существует
+        result = await session.execute(select(Article).where(Article.id == article_id))
+        article = result.scalar_one_or_none()
+        
+        if not article:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Статья с ID {article_id} не найдена"
+            )
+        
+        # Получить RAG сервис и переобработать статью
+        rag_service = await get_rag_service()
+        result = await rag_service.reprocess_article(article_id, request.filename)
+        
+        return ProcessArticleResponse(**result)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при переобработке статьи: {str(e)}"
+        )
+
+
+@router.post(
+    "/search",
+    response_model=SearchResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Поиск по всем статьям",
+    description="Выполняет RAG поиск по всем обработанным статьям"
+)
+async def search_all_articles(request: SearchRequest) -> SearchResponse:
+    """
+    RAG поиск по всему корпусу статей.
+    
+    - **query**: Текстовый запрос на русском языке
+    - **limit**: Максимальное количество результатов (по умолчанию 5)
+    """
+    try:
+        rag_service = await get_rag_service()
+        results = await rag_service.search(request.query, request.limit)
+        
+        # Преобразовать результаты в ChunkResult
+        chunk_results = [ChunkResult(**result) for result in results]
+        
+        return SearchResponse(
+            query=request.query,
+            results=chunk_results,
+            count=len(chunk_results),
+            article_id=None
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при поиске: {str(e)}"
+        )
+
+
+@router.post(
+    "/{article_id}/search",
+    response_model=SearchResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Поиск в конкретной статье",
+    description="Выполняет RAG поиск только в пределах одной статьи"
+)
+async def search_in_article(
+    article_id: int,
+    request: SearchRequest,
+    session: AsyncSession = Depends(get_db)
+) -> SearchResponse:
+    """
+    RAG поиск в конкретной статье.
+    
+    - **article_id**: ID статьи для поиска
+    - **query**: Текстовый запрос на русском языке
+    - **limit**: Максимальное количество результатов (по умолчанию 5)
+    """
+    try:
+        # Проверить что статья существует
+        result = await session.execute(select(Article).where(Article.id == article_id))
+        article = result.scalar_one_or_none()
+        
+        if not article:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Статья с ID {article_id} не найдена"
+            )
+        
+        # Выполнить поиск в статье
+        rag_service = await get_rag_service()
+        results = await rag_service.search_in_article(request.query, article_id, request.limit)
+        
+        # Преобразовать результаты в ChunkResult
+        chunk_results = [ChunkResult(**result) for result in results]
+        
+        return SearchResponse(
+            query=request.query,
+            results=chunk_results,
+            count=len(chunk_results),
+            article_id=article_id
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при поиске в статье: {str(e)}"
+        )
+
+
+@router.get(
+    "/rag/stats",
+    response_model=VectorStoreInfo,
+    status_code=status.HTTP_200_OK,
+    summary="Статистика векторной БД",
+    description="Получить информацию о Qdrant коллекции"
+)
+async def get_vector_store_stats() -> VectorStoreInfo:
+    """
+    Получить информацию о векторной БД Qdrant (количество документов, векторов и т.д.)
+    """
+    try:
+        rag_service = await get_rag_service()
+        info = await rag_service.get_vector_store_info()
+        return VectorStoreInfo(**info)
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при получении статистики: {str(e)}"
         )

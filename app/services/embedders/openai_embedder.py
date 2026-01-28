@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 import backoff
 import numpy as np
 from openai import AsyncOpenAI, RateLimitError, APIError
+from httpx import Timeout
 from app.config import settings
 from app.services.embedders.abc_embedder import ABCEmbedder
 
@@ -16,7 +17,6 @@ def binary_quantize(embeddings: np.ndarray) -> np.ndarray:
 
 
 class OpenAIEmbedder(ABCEmbedder):
-    """Embedder с использованием OpenAI API"""
     
     def __init__(
         self,
@@ -26,35 +26,22 @@ class OpenAIEmbedder(ABCEmbedder):
         api_key: Optional[str] = settings.OPENAI_API_KEY,
         api_base: Optional[str] = None,
     ):
-        """
-        Инициализация OpenAI embedder
         
-        Args:
-            model_name: Имя модели OpenAI (по умолчанию text-embedding-3-small)
-            dimensions: Размерность embedding-а
-            quantization: Тип квантизации ('float' или 'binary')
-            api_key: OpenAI API ключ
-            api_base: Base URL для OpenAI API
-        """
         self.model = model_name
         self.dimensions = dimensions
         self.quantization = quantization
+        
+        # Увеличить timeout до 60 секунд для медленных запросов
+        timeout = Timeout(60.0, connect=10.0, read=60.0, write=10.0, pool=10.0)
+        
         self.openai_client = AsyncOpenAI(
             api_key=api_key or os.environ.get("OPENAI_API_KEY"),
-            base_url=api_base or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1/")
+            base_url=api_base or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1/"),
+            timeout=timeout
         )
 
     @backoff.on_exception(backoff.expo, (RateLimitError, APIError), max_tries=3)
     async def get_embedding(self, text: str) -> np.ndarray:
-        """
-        Получить embedding для одного текста
-        
-        Args:
-            text: Текст для эмбеддирования
-            
-        Returns:
-            numpy array с embedding-ом
-        """
         try:
             response = await self.openai_client.embeddings.create(
                 model=self.model,
@@ -81,15 +68,6 @@ class OpenAIEmbedder(ABCEmbedder):
             raise Exception(f"Failed to generate embedding: {str(e)}")
 
     async def embed_texts(self, texts: List[str]) -> List[np.ndarray]:
-        """
-        Получить embeddings для списка текстов
-        
-        Args:
-            texts: Список текстов для эмбеддирования
-            
-        Returns:
-            Список numpy arrays с embedding-ами
-        """
         try:
             response = await self.openai_client.embeddings.create(
                 model=self.model,

@@ -443,3 +443,45 @@ async def get_vector_store_stats() -> VectorStoreInfo:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Ошибка при получении статистики: {str(e)}"
         )
+
+
+@router.post(
+    "/ask",
+    summary="RAG вопрос-ответ",
+    description="Найти релевантные чанки и сгенерировать ответ через OpenAI"
+)
+async def ask_question(request: SearchRequest):
+    """
+    Полный RAG цикл: поиск + генерация ответа
+    
+    - Ищет релевантные чанки в векторной БД
+    - Добавляет их в контекст
+    - Отправляет вопрос с контекстом в OpenAI
+    - Возвращает развёрнутый ответ с источниками
+    """
+    try:
+        rag_service = await get_rag_service()
+        result = await rag_service.generate_answer(
+            query=request.query,
+            limit=request.limit or 5
+        )
+        
+        print(f"🔍 DEBUG endpoint: result keys = {result.keys()}")
+        print(f"🔍 DEBUG endpoint: sources = {result.get('sources')}")
+        
+        return {
+            "query": result["query"],
+            "answer": result["answer"],
+            "sources": result.get("sources", []),
+            "chunks_used": result["chunks_count"],
+            "status": result["status"]
+        }
+        
+    except Exception as e:
+        print(f"❌ DEBUG endpoint: Exception = {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при генерации ответа: {str(e)}"
+        )

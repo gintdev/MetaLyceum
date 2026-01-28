@@ -25,10 +25,11 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION_NAME: str = "philosophy_texts"
     
     # OpenAI API
-    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_API_KEY: str
     OPENAI_MODEL: str = "text-embedding-3-small"
     OPENAI_EMBEDDING_DIMENSIONS: int = 1536
     OPENAI_QUANTIZATION: str = "float"  # 'float' или 'binary'
+    OPENAI_CHAT_MODEL: str = "gpt-4o"  # модель для генерации ответов
     
     # RAG Configuration
     CHUNK_SIZE: int = 1024  # размер чанка в токенах

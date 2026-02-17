@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import List, Dict, Optional
 import numpy as np
 
@@ -325,7 +326,15 @@ class RAGService:
             context = "\n\n".join(context_parts)
             # 3. Создать prompt для OpenAI
             if system_prompt is None:
-                system_prompt = """Вы — помощник по философским вопросам. 
+                try:
+                    app_dir = os.path.dirname(os.path.dirname(__file__))
+                    prompt_path = os.path.join(app_dir, "prompts", "basic_request_prompt.txt")
+                    with open(prompt_path, "r", encoding="utf-8") as f:
+                        system_prompt = f.read()
+                    logger.info("✓ Загрузили system_prompt из файла basic_request_prompt.txt")
+                except Exception as e:
+                    logger.error(f"✗ Не удалось загрузить system_prompt из файла: {str(e)}")
+                    system_prompt = """Вы — помощник по философским вопросам. 
 Используйте предоставленный контекст для ответа на вопросы пользователя.
 Если информация не в контексте, скажите об этом.
 Будьте точны и ссылайтесь на источники."""

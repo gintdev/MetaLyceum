@@ -23,7 +23,7 @@ class RAGService:
         Перевести текст на английский язык через OpenAI Chat API
         """
         try:
-            logger.info(f"🌐 Перевод запроса на английский: {text[:50]}...")
+            logger.info(f"Перевод запроса на английский: {text[:50]}...")
             system_prompt = "You are a translation assistant. Translate the following text to English. Return only the translation, no explanations."
             user_message = text
             response = await self.embedder.openai_client.chat.completions.create(
@@ -40,7 +40,7 @@ class RAGService:
                 logger.info(f"✓ Перевод выполнен: {translation[:50]}")
                 return translation
             else:
-                logger.warning("⚠️ Не удалось получить перевод через OpenAI")
+                logger.warning("Не удалось получить перевод через OpenAI")
                 return text
         except Exception as e:
             logger.error(f"✗ Ошибка при переводе: {str(e)}")
@@ -206,7 +206,7 @@ class RAGService:
             
             # Обработать заново
             result = await self.process_article(article_id, filename)
-            logger.info(f"✅ Статья {article_id} переобработана")
+            logger.info(f"Статья {article_id} переобработана")
             
             return result
             
@@ -291,27 +291,28 @@ class RAGService:
             logger.error(f"✗ Ошибка при получении информации: {str(e)}")
             raise
     
+    # Ответ на вопрос
     async def generate_answer(
         self,
         query: str,
         limit: int = settings.SEARCH_LIMIT,
-        system_prompt: Optional[str] = None,
+        query_type: int = 0,
     ) -> Dict:
         """
         Полный RAG цикл: гибридный поиск чанков -> генерация ответа
         """
         try:
-            logger.info(f"🔄 RAG запрос (гибрид): {query[:50]}...")
+            logger.info(f"RAG запрос (гибрид): {query[:50]}...")
             # 1. Гибридный поиск (оригинал + перевод)
             search_results = await self.hybrid_search(query, limit=limit, translation_limit=limit, final_limit=limit)
             if not search_results:
-                logger.warning("⚠️ Релевантные чанки не найдены")
+                logger.warning("Релевантные чанки не найдены")
                 return {
                     "answer": "К сожалению, в базе знаний не найдено релевантной информации.",
                     "chunks": [],
                     "status": "no_results"
                 }
-            logger.info(f"✓ Найдено {len(search_results)} чанков для контекста (гибрид)")
+            logger.info(f"Найдено {len(search_results)} чанков для контекста (гибрид)")
             # 2. Собрать контекст из чанков (сократить до 2000 символов)
             context_parts = []
             total_length = 0
@@ -324,36 +325,36 @@ class RAGService:
                 context_parts.append(f"[Источник {i}] {text}")
                 total_length += len(text)
             context = "\n\n".join(context_parts)
-            # 3. Создать prompt для OpenAI
-            if system_prompt is None:
-                try:
-                    app_dir = os.path.dirname(os.path.dirname(__file__))
-                    prompt_path = os.path.join(app_dir, "prompts", "basic_request_prompt.txt")
-                    with open(prompt_path, "r", encoding="utf-8") as f:
-                        system_prompt = f.read()
-                    logger.info("✓ Загрузили system_prompt из файла basic_request_prompt.txt")
-                except Exception as e:
-                    logger.error(f"✗ Не удалось загрузить system_prompt из файла: {str(e)}")
-                    system_prompt = """Вы — помощник по философским вопросам. 
-Используйте предоставленный контекст для ответа на вопросы пользователя.
-Если информация не в контексте, скажите об этом.
-Будьте точны и ссылайтесь на источники."""
-            user_message = f"""Контекст из философских статей:
 
-{context}
-
----
-
-Вопрос: {query}
-
-Ответьте на вопрос, используя информацию из контекста выше."""
-            # 4. Отправить в OpenAI
-            print(f"🔍 DEBUG: Начинаем запрос к OpenAI...")
-            print(f"🔍 DEBUG: Model: {settings.OPENAI_CHAT_MODEL}")
-            print(f"🔍 DEBUG: Query: {query[:100]}")
-            logger.info("4️⃣ Генерирование ответа через OpenAI...")
+            system_prompt = ""
             try:
-                print(f"🔍 DEBUG: Отправляем запрос в OpenAI...")
+                app_dir = os.path.dirname(os.path.dirname(__file__))
+                prompt_map = {
+                    0: "basic_request_prompt.txt",
+                    1: "essay_prompt.txt",
+                    2: "literature_recommendation_prompt.txt",
+                }
+                prompt_filename = prompt_map.get(query_type, "basic_request_prompt.txt")
+                prompt_path = os.path.join(app_dir, "prompts", prompt_filename)
+                with open(prompt_path, "r", encoding="utf-8") as f:
+                    system_prompt = f.read()
+                logger.info(f"Загрузили system_prompt из файла {prompt_filename}")
+            except Exception as e:
+                logger.error(f"Не удалось загрузить system_prompt из файла: {str(e)}")
+                system_prompt = ""
+
+            user_message = f"""Контекст из философских статей: 
+                {context}
+                ---
+                Вопрос: {query}
+                Ответьте на вопрос, используя информацию из контекста выше."""
+            # 4. Отправить в OpenAI
+            print(f"DEBUG: Начинаем запрос к OpenAI...")
+            print(f"DEBUG: Model: {settings.OPENAI_CHAT_MODEL}")
+            print(f"DEBUG: Query: {query[:100]}")
+            logger.info("Генерирование ответа через OpenAI...")
+            try:
+                print(f"DEBUG: Отправляем запрос в OpenAI...")
                 logger.debug(f"OpenAI Chat Model: {settings.OPENAI_CHAT_MODEL}")
                 logger.debug(f"User message length: {len(user_message)}")
                 response = await self.embedder.openai_client.chat.completions.create(
@@ -365,29 +366,29 @@ class RAGService:
                     temperature=0.7,
                     max_tokens=1000
                 )
-                print(f"🔍 DEBUG: Получен ответ от OpenAI")
-                print(f"🔍 DEBUG: Response type: {type(response).__name__}")
+                print(f"DEBUG: Получен ответ от OpenAI")
+                print(f"DEBUG: Response type: {type(response).__name__}")
                 logger.debug(f"OpenAI Response type: {type(response)}")
                 logger.debug(f"OpenAI Response: {response}")
                 if response is None:
-                    print(f"❌ DEBUG: Response is None")
-                    logger.error("❌ Response is None")
+                    print(f"DEBUG: Response is None")
+                    logger.error("Response is None")
                     answer = "Ошибка: ответ от OpenAI пустой"
                 elif not hasattr(response, 'choices'):
-                    print(f"❌ DEBUG: Response has no 'choices' attribute")
-                    logger.error(f"❌ Response has no 'choices' attribute: {dir(response)}")
+                    print(f"DEBUG: Response has no 'choices' attribute")
+                    logger.error(f"Response has no 'choices' attribute: {dir(response)}")
                     answer = f"Ошибка: неожиданный формат ответа"
                 elif response.choices is None or len(response.choices) == 0:
-                    print(f"❌ DEBUG: No choices in response")
-                    logger.error(f"❌ No choices in response: {response.choices}")
+                    print(f"DEBUG: No choices in response")
+                    logger.error(f"No choices in response: {response.choices}")
                     answer = "Ошибка: нет выбора в ответе OpenAI"
                 else:
                     answer = response.choices[0].message.content
-                    print(f"✅ DEBUG: Ответ получен, длина: {len(answer)}")
+                    print(f"DEBUG: Ответ получен, длина: {len(answer)}")
                     logger.info("✓ Ответ получен от OpenAI")
             except Exception as api_error:
-                print(f"❌ DEBUG: Ошибка в OpenAI API: {str(api_error)}")
-                logger.error(f"❌ Ошибка OpenAI API: {str(api_error)}", exc_info=True)
+                print(f"DEBUG: Ошибка в OpenAI API: {str(api_error)}")
+                logger.error(f"Ошибка OpenAI API: {str(api_error)}", exc_info=True)
                 raise
             print(f"🔍 DEBUG: Формируем ответ...")
             logger.info("✓ Ответ сгенерирован")
@@ -413,11 +414,11 @@ class RAGService:
                     "chunks_count": len(search_results),
                     "status": "success"
                 }
-                print(f"✅ DEBUG: Результат сформирован успешно")
+                print(f"DEBUG: Результат сформирован успешно")
                 return result
             except Exception as format_error:
-                print(f"❌ DEBUG: Ошибка при формировании результата: {str(format_error)}")
-                logger.error(f"❌ Ошибка при формировании результата: {str(format_error)}", exc_info=True)
+                print(f"DEBUG: Ошибка при формировании результата: {str(format_error)}")
+                logger.error(f"Ошибка при формировании результата: {str(format_error)}", exc_info=True)
                 raise
         except Exception as e:
             logger.error(f"✗ Ошибка при генерации ответа: {str(e)}")

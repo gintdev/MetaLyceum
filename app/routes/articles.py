@@ -238,7 +238,7 @@ async def delete_article(
         )
 
 
-# ===== RAG Endpoints =====
+# RAG endpoints
 
 @router.post(
     "/{article_id}/process",
@@ -447,7 +447,7 @@ async def get_vector_store_stats() -> VectorStoreInfo:
 
 @router.post(
     "/ask",
-    summary="RAG вопрос-ответ",
+    summary="Ответить развернуто на вопрос",
     description="Найти релевантные чанки и сгенерировать ответ через OpenAI"
 )
 async def ask_question(request: SearchRequest):
@@ -463,11 +463,12 @@ async def ask_question(request: SearchRequest):
         rag_service = await get_rag_service()
         result = await rag_service.generate_answer(
             query=request.query,
-            limit=request.limit or 5
+            limit=request.limit or 5,
+            query_type=request.query_type
         )
         
-        print(f"🔍 DEBUG endpoint: result keys = {result.keys()}")
-        print(f"🔍 DEBUG endpoint: sources = {result.get('sources')}")
+        print(f"DEBUG endpoint: result keys = {result.keys()}")
+        print(f"DEBUG endpoint: sources = {result.get('sources')}")
         
         return {
             "query": result["query"],
@@ -478,7 +479,71 @@ async def ask_question(request: SearchRequest):
         }
         
     except Exception as e:
-        print(f"❌ DEBUG endpoint: Exception = {str(e)}")
+        print(f"DEBUG endpoint: Exception = {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при генерации ответа: {str(e)}"
+        )
+    
+@router.post(
+    "/essay",
+    summary = "Написать эссе",
+    description = "Найти релевантные чанки-источники и сгенерировать ответ через OpenAI"
+)
+async def write_essay(request: SearchRequest):
+    try:
+        rag_service = await get_rag_service()
+        result = await rag_service.generate_answer(
+            query = request.query,
+            limit = request.limit or 10,
+            query_type = 1
+        )
+        print(f"DEBUG endpoint: result keys = {result.keys()}")
+        print(f"DEBUG endpoint: sources = {result.get('sources')}")
+
+        return {
+            "query": result["query"],
+            "answer": result["answer"],
+            "sources": result.get("sources", []),
+            "chunks_used": result["chunks_count"],
+            "status": result["status"]
+        }
+    except Exception as e:
+        print(f"DEBUG endpoint: Exception = {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при генерации ответа: {str(e)}"
+        )
+
+@router.post(
+    "/literature",
+    summary = "Рекомендация материалов",
+    description = "Найти релевантные чанки-источники и сгенерировать ответ через OpenAI"
+)
+async def recomend_literature(request: SearchRequest):
+    try:
+        rag_service = await get_rag_service()
+        result = await rag_service.generate_answer(
+            query = request.query,
+            limit = request.limit or 5,
+            query_type = 2
+        )
+        print(f"DEBUG endpoint: result keys = {result.keys()}")
+        print(f"DEBUG endpoint: sources = {result.get('sources')}")
+
+        return {
+            "query": result["query"],
+            "answer": result["answer"],
+            "sources": result.get("sources", []),
+            "chunks_used": result["chunks_count"],
+            "status": result["status"]
+        }
+    except Exception as e:
+        print(f"DEBUG endpoint: Exception = {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(

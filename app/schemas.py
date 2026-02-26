@@ -113,13 +113,15 @@ class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2048, description="Поисковый запрос")
     article_id: Optional[int] = Field(None, description="ID статьи для фильтрации (опционально)")
     limit: int = Field(5, ge=1, le=100, description="Количество результатов")
+    query_type: int = Field(0, ge=0, le=2, description="Тип ответа: 0 - базовый, 1 - эссе, 2 - рекомендация литературы")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "query": "Что такое трансцендентальная логика?",
                 "article_id": None,
-                "limit": 5
+                "limit": 5,
+                "query_type": 0
             }
         }
 

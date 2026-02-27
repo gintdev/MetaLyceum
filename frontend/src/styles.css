@@ -1,0 +1,226 @@
+:root {
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  color: #0f172a;
+  background: #f8fafc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+.title {
+  margin: 0;
+}
+
+.subtitle {
+  margin-top: 8px;
+  color: #475569;
+}
+
+.modeSwitch {
+  margin-top: 14px;
+  display: flex;
+  gap: 8px;
+}
+
+.modeButton {
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #0f172a;
+  padding: 8px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.modeButtonActive {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+}
+
+.modeButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.chatBox {
+  margin-top: 16px;
+  padding: 16px;
+  min-height: 360px;
+  border-radius: 12px;
+  border: 1px solid #dbeafe;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.placeholder {
+  color: #94a3b8;
+  margin: auto;
+}
+
+.message {
+  padding: 10px 12px;
+  border-radius: 10px;
+  max-width: 80%;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.messageRole {
+  font-size: 12px;
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+
+.messageUser {
+  align-self: flex-end;
+  background: #dbeafe;
+}
+
+.messageAssistant {
+  align-self: flex-start;
+  background: #f1f5f9;
+}
+
+.form {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.input {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 10px;
+  resize: vertical;
+  font: inherit;
+}
+
+.filterPanel {
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.filterTitle {
+  font-size: 13px;
+  color: #475569;
+  margin-bottom: 8px;
+}
+
+.filterGrid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.filterInput {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.sourceDropdown {
+  position: relative;
+}
+
+.sourceDropdownButton {
+  text-align: left;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.sourceDropdownMenu {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.sourceOption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 6px;
+}
+
+.sourceOption:hover {
+  background: #f1f5f9;
+}
+
+.sourceEmpty {
+  color: #64748b;
+  padding: 6px;
+  font-size: 13px;
+}
+
+.keywordSuggestions {
+  list-style: none;
+  margin: -2px 0 0;
+  padding: 4px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.keywordSuggestionItem {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.keywordSuggestionItem:hover {
+  background: #f1f5f9;
+}
+
+.button {
+  width: fit-content;
+  border: none;
+  border-radius: 10px;
+  background: #2563eb;
+  color: #ffffff;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.error {
+  color: #b91c1c;
+}

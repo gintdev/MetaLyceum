@@ -2,7 +2,8 @@ from sqlalchemy.exc import IntegrityError
 from typing import List, Annotated
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
-from sqlalchemy import select, func
+from sqlalchemy import select, func, Text, cast
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
@@ -15,6 +16,66 @@ from app.schemas import (
 from app.services.rag import get_rag_service
 
 router = APIRouter(prefix="/articles", tags=["articles"])
+
+
+async def _get_filtered_article_ids(
+    request: SearchRequest,
+    session: AsyncSession,
+) -> List[int] | None:
+    """
+    Вернуть список article_id по фильтрам из запроса.
+    Если фильтров нет — вернуть None (поиск по всем статьям).
+    """
+    keywords_filter = []
+    if request.keyword and request.keyword.strip():
+        keywords_filter.append(request.keyword.strip())
+    if request.keywords:
+        keywords_filter.extend([kw.strip() for kw in request.keywords if kw and kw.strip()])
+
+    sources_filter = []
+    if request.sources:
+        sources_filter.extend([src.strip() for src in request.sources if src and src.strip()])
+
+    source_filter = request.source.strip() if request.source and request.source.strip() else None
+    has_metadata_filters = bool(source_filter or sources_filter or keywords_filter or request.year_from is not None or request.year_to is not None)
+
+    if request.year_from is not None and request.year_to is not None and request.year_from > request.year_to:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Нижняя граница года не может быть больше верхней"
+        )
+
+    if request.article_id is not None and not has_metadata_filters:
+        return [request.article_id]
+
+    if not has_metadata_filters and request.article_id is None:
+        return None
+
+    stmt = select(Article.id)
+
+    if request.article_id is not None:
+        stmt = stmt.where(Article.id == request.article_id)
+
+    if sources_filter:
+        stmt = stmt.where(Article.source.in_(sources_filter))
+    elif source_filter:
+        stmt = stmt.where(Article.source.ilike(f"%{source_filter}%"))
+
+    if keywords_filter:
+        stmt = stmt.where(
+            Article.keywords.overlap(
+                cast(keywords_filter, ARRAY(Text))
+            )
+        )
+
+    if request.year_from is not None:
+        stmt = stmt.where(Article.published_year >= request.year_from)
+
+    if request.year_to is not None:
+        stmt = stmt.where(Article.published_year <= request.year_to)
+
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
 
 
 @router.post(
@@ -131,6 +192,57 @@ async def get_articles(
         page=page,
         page_size=page_size
     )
+
+@router.get(
+    "/keywords",
+    response_model=List[str],
+    summary="Получить список ключевых слов",
+    description="Возвращает уникальные ключевые слова из БД с опциональной фильтрацией по префиксу"
+)
+async def get_keywords(
+    query: str | None = Query(None, min_length=1, max_length=256),
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    session: AsyncSession = Depends(get_db)
+) -> List[str]:
+    keywords_subquery = (
+        select(func.unnest(Article.keywords).label("keyword"))
+        .where(Article.keywords.is_not(None))
+        .subquery()
+    )
+
+    stmt = select(keywords_subquery.c.keyword).distinct().where(
+        keywords_subquery.c.keyword.is_not(None)
+    )
+
+    if query:
+        stmt = stmt.where(keywords_subquery.c.keyword.ilike(f"{query.strip()}%"))
+
+    stmt = stmt.order_by(keywords_subquery.c.keyword).limit(limit)
+
+    result = await session.execute(stmt)
+    return [keyword for keyword in result.scalars().all() if keyword]
+
+
+@router.get(
+    "/sources",
+    response_model=List[str],
+    summary="Получить список источников",
+    description="Возвращает уникальные источники из БД"
+)
+async def get_sources(
+    query: str | None = Query(None, min_length=1, max_length=256),
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    session: AsyncSession = Depends(get_db)
+) -> List[str]:
+    stmt = select(Article.source).distinct().where(Article.source.is_not(None))
+
+    if query:
+        stmt = stmt.where(Article.source.ilike(f"{query.strip()}%"))
+
+    stmt = stmt.order_by(Article.source).limit(limit)
+
+    result = await session.execute(stmt)
+    return [source for source in result.scalars().all() if source]
 
 
 @router.get(
@@ -341,7 +453,10 @@ async def reprocess_article_for_rag(
     summary="Поиск по всем статьям",
     description="Выполняет RAG поиск по всем обработанным статьям"
 )
-async def search_all_articles(request: SearchRequest) -> SearchResponse:
+async def search_all_articles(
+    request: SearchRequest,
+    session: AsyncSession = Depends(get_db)
+) -> SearchResponse:
     """
     RAG поиск по всему корпусу статей.
     
@@ -349,8 +464,21 @@ async def search_all_articles(request: SearchRequest) -> SearchResponse:
     - **limit**: Максимальное количество результатов (по умолчанию 5)
     """
     try:
+        filtered_article_ids = await _get_filtered_article_ids(request, session)
+        if filtered_article_ids is not None and not filtered_article_ids:
+            return SearchResponse(
+                query=request.query,
+                results=[],
+                count=0,
+                article_id=request.article_id
+            )
+
         rag_service = await get_rag_service()
-        results = await rag_service.search(request.query, request.limit)
+        results = await rag_service.search(
+            request.query,
+            request.limit,
+            article_ids=filtered_article_ids
+        )
         
         # Преобразовать результаты в ChunkResult
         chunk_results = [ChunkResult(**result) for result in results]
@@ -359,7 +487,7 @@ async def search_all_articles(request: SearchRequest) -> SearchResponse:
             query=request.query,
             results=chunk_results,
             count=len(chunk_results),
-            article_id=None
+            article_id=request.article_id
         )
         
     except Exception as e:
@@ -389,6 +517,16 @@ async def search_in_article(
     - **limit**: Максимальное количество результатов (по умолчанию 5)
     """
     try:
+        request.article_id = article_id
+        filtered_article_ids = await _get_filtered_article_ids(request, session)
+        if filtered_article_ids is not None and article_id not in filtered_article_ids:
+            return SearchResponse(
+                query=request.query,
+                results=[],
+                count=0,
+                article_id=article_id
+            )
+
         # Проверить что статья существует
         result = await session.execute(select(Article).where(Article.id == article_id))
         article = result.scalar_one_or_none()
@@ -444,13 +582,16 @@ async def get_vector_store_stats() -> VectorStoreInfo:
             detail=f"Ошибка при получении статистики: {str(e)}"
         )
 
-
+# Ответ на вопрос
 @router.post(
     "/ask",
     summary="Ответить развернуто на вопрос",
     description="Найти релевантные чанки и сгенерировать ответ через OpenAI"
 )
-async def ask_question(request: SearchRequest):
+async def ask_question(
+    request: SearchRequest,
+    session: AsyncSession = Depends(get_db)
+):
     """
     Полный RAG цикл: поиск + генерация ответа
     
@@ -460,11 +601,22 @@ async def ask_question(request: SearchRequest):
     - Возвращает развёрнутый ответ с источниками
     """
     try:
+        filtered_article_ids = await _get_filtered_article_ids(request, session)
+        if filtered_article_ids is not None and not filtered_article_ids:
+            return {
+                "query": request.query,
+                "answer": "К сожалению, по заданным фильтрам статьи не найдены.",
+                "sources": [],
+                "chunks_used": 0,
+                "status": "no_results"
+            }
+
         rag_service = await get_rag_service()
         result = await rag_service.generate_answer(
             query=request.query,
             limit=request.limit or 5,
-            query_type=request.query_type
+            query_type=request.query_type,
+            article_ids=filtered_article_ids,
         )
         
         print(f"DEBUG endpoint: result keys = {result.keys()}")
@@ -486,19 +638,34 @@ async def ask_question(request: SearchRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Ошибка при генерации ответа: {str(e)}"
         )
-    
+
+# Написание эссе 
 @router.post(
     "/essay",
     summary = "Написать эссе",
     description = "Найти релевантные чанки-источники и сгенерировать ответ через OpenAI"
 )
-async def write_essay(request: SearchRequest):
+async def write_essay(
+    request: SearchRequest,
+    session: AsyncSession = Depends(get_db)
+):
     try:
+        filtered_article_ids = await _get_filtered_article_ids(request, session)
+        if filtered_article_ids is not None and not filtered_article_ids:
+            return {
+                "query": request.query,
+                "answer": "К сожалению, по заданным фильтрам статьи не найдены.",
+                "sources": [],
+                "chunks_used": 0,
+                "status": "no_results"
+            }
+
         rag_service = await get_rag_service()
         result = await rag_service.generate_answer(
             query = request.query,
             limit = request.limit or 10,
-            query_type = 1
+            query_type = 1,
+            article_ids=filtered_article_ids,
         )
         print(f"DEBUG endpoint: result keys = {result.keys()}")
         print(f"DEBUG endpoint: sources = {result.get('sources')}")
@@ -519,18 +686,33 @@ async def write_essay(request: SearchRequest):
             detail=f"Ошибка при генерации ответа: {str(e)}"
         )
 
+# Рекомендация литературы
 @router.post(
     "/literature",
     summary = "Рекомендация материалов",
     description = "Найти релевантные чанки-источники и сгенерировать ответ через OpenAI"
 )
-async def recomend_literature(request: SearchRequest):
+async def recomend_literature(
+    request: SearchRequest,
+    session: AsyncSession = Depends(get_db)
+):
     try:
+        filtered_article_ids = await _get_filtered_article_ids(request, session)
+        if filtered_article_ids is not None and not filtered_article_ids:
+            return {
+                "query": request.query,
+                "answer": "К сожалению, по заданным фильтрам статьи не найдены.",
+                "sources": [],
+                "chunks_used": 0,
+                "status": "no_results"
+            }
+
         rag_service = await get_rag_service()
         result = await rag_service.generate_answer(
             query = request.query,
             limit = request.limit or 5,
-            query_type = 2
+            query_type = 2,
+            article_ids=filtered_article_ids,
         )
         print(f"DEBUG endpoint: result keys = {result.keys()}")
         print(f"DEBUG endpoint: sources = {result.get('sources')}")

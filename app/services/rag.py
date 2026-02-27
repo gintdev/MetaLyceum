@@ -51,7 +51,8 @@ class RAGService:
         query: str,
         limit: int = settings.SEARCH_LIMIT,
         translation_limit: int = 5,
-        final_limit: int = None
+        final_limit: int = None,
+        article_ids: Optional[List[int]] = None,
     ) -> List[Dict]:
         """
         Гибридный поиск: ищет по оригинальному и переведённому запросу, объединяет и сортирует результаты по score
@@ -65,13 +66,13 @@ class RAGService:
         """
         logger.info(f"🔍 Гибридный поиск: оригинал + перевод для '{query[:50]}'")
         # 1. Поиск по оригиналу
-        orig_results = await self.search(query, limit)
+        orig_results = await self.search(query, limit, article_ids=article_ids)
         # 2. Перевести запрос
         translated_query = await self.translate_to_english(query)
         print(f"🔍 DEBUG: Translated query: {translated_query}")
         # 3. Поиск по переводу (если перевод отличается)
         if translated_query.strip().lower() != query.strip().lower():
-            trans_results = await self.search(translated_query, translation_limit)
+            trans_results = await self.search(translated_query, translation_limit, article_ids=article_ids)
         else:
             trans_results = []
         # 4. Объединить и дедуплицировать по (article_id, chunk_text)
@@ -218,6 +219,7 @@ class RAGService:
         self,
         query: str,
         limit: int = settings.SEARCH_LIMIT,
+        article_ids: Optional[List[int]] = None,
     ) -> List[Dict]:
         """
         Поиск по запросу: embedding -> поиск в Qdrant
@@ -236,7 +238,10 @@ class RAGService:
             query_embedding = await self.embedder.get_embedding(query)
             
             # 2. Найти похожие документы
-            results = await self.vector_store.search(query_embedding, limit)
+            if article_ids is not None:
+                results = await self.vector_store.search_by_article_ids(query_embedding, article_ids, limit)
+            else:
+                results = await self.vector_store.search(query_embedding, limit)
             
             logger.info(f"✓ Найдено {len(results)} релевантных документов")
             return results
@@ -297,14 +302,18 @@ class RAGService:
         query: str,
         limit: int = settings.SEARCH_LIMIT,
         query_type: int = 0,
+        article_ids: Optional[List[int]] = None,
     ) -> Dict:
-        """
-        Полный RAG цикл: гибридный поиск чанков -> генерация ответа
-        """
         try:
             logger.info(f"RAG запрос (гибрид): {query[:50]}...")
             # 1. Гибридный поиск (оригинал + перевод)
-            search_results = await self.hybrid_search(query, limit=limit, translation_limit=limit, final_limit=limit)
+            search_results = await self.hybrid_search(
+                query,
+                limit=limit,
+                translation_limit=limit,
+                final_limit=limit,
+                article_ids=article_ids,
+            )
             if not search_results:
                 logger.warning("Релевантные чанки не найдены")
                 return {
@@ -343,12 +352,11 @@ class RAGService:
                 logger.error(f"Не удалось загрузить system_prompt из файла: {str(e)}")
                 system_prompt = ""
 
-            user_message = f"""Контекст из философских статей: 
-                {context}
+            user_message = f"""
+            Контекст из философских статей: {context}
                 ---
-                Вопрос: {query}
-                Ответьте на вопрос, используя информацию из контекста выше."""
-            # 4. Отправить в OpenAI
+            Вопрос: {query}"""
+            
             print(f"DEBUG: Начинаем запрос к OpenAI...")
             print(f"DEBUG: Model: {settings.OPENAI_CHAT_MODEL}")
             print(f"DEBUG: Query: {query[:100]}")

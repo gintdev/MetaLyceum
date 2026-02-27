@@ -31,6 +31,50 @@ services:
       - "${QDRANT_PORT:-6333}:6333"
     networks:
       - metalyceum
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: metalyceum-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    environment:
+      DB_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-metalyceum}
+      DB_PORT: 5432
+      DB_HOST: postgres
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_PORT: 6333
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o}
+      OPENAI_MODEL: ${OPENAI_MODEL:-text-embedding-3-small}
+      OPENAI_EMBEDDING_DIMENSIONS: ${OPENAI_EMBEDDING_DIMENSIONS:-1536}
+      OPENAI_QUANTIZATION: ${OPENAI_QUANTIZATION:-float}
+      YADISK_TOKEN: ${YADISK_TOKEN:-}
+      YADISK_FOLDER: ${YADISK_FOLDER:-MetaLyceum}
+    ports:
+      - "8000:8000"
+    networks:
+      - metalyceum
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: metalyceum-frontend
+    depends_on:
+      - backend
+    environment:
+      VITE_API_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    networks:
+      - metalyceum
 volumes:
   postgres_data:
   qdrant_data:

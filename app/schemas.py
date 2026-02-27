@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices
 from typing import Optional, List
 from datetime import datetime
 
@@ -114,6 +114,24 @@ class SearchRequest(BaseModel):
     article_id: Optional[int] = Field(None, description="ID статьи для фильтрации (опционально)")
     limit: int = Field(5, ge=1, le=100, description="Количество результатов")
     query_type: int = Field(0, ge=0, le=2, description="Тип ответа: 0 - базовый, 1 - эссе, 2 - рекомендация литературы")
+    keyword: Optional[str] = Field(None, min_length=1, max_length=256, description="Ключевое слово для фильтрации статей")
+    keywords: Optional[List[str]] = Field(None, description="Список ключевых слов для фильтрации статей")
+    source: Optional[str] = Field(None, min_length=1, max_length=256, description="Источник статьи для фильтрации")
+    sources: Optional[List[str]] = Field(None, description="Список источников для фильтрации статей")
+    year_from: Optional[int] = Field(
+        None,
+        ge=1900,
+        le=2100,
+        description="Нижняя граница года публикации",
+        validation_alias=AliasChoices("year_from", "publication_year_from", "publication_date_from")
+    )
+    year_to: Optional[int] = Field(
+        None,
+        ge=1900,
+        le=2100,
+        description="Верхняя граница года публикации",
+        validation_alias=AliasChoices("year_to", "publication_year_to", "publication_date_to")
+    )
 
     class Config:
         json_schema_extra = {
@@ -121,7 +139,11 @@ class SearchRequest(BaseModel):
                 "query": "Что такое трансцендентальная логика?",
                 "article_id": None,
                 "limit": 5,
-                "query_type": 0
+                "query_type": 0,
+                "keywords": ["эпистемология", "разум"],
+                "sources": ["Stanford Encyclopedia of Philosophy", "Internet Encyclopedia of Philosophy"],
+                "year_from": 1990,
+                "year_to": 2025
             }
         }
 

@@ -32,9 +32,11 @@ class Settings(BaseSettings):
     OPENAI_CHAT_MODEL: str = "gpt-4o"  # модель для генерации ответов
     
     # RAG Configuration
-    CHUNK_SIZE: int = 1024  # размер чанка в токенах
-    CHUNK_OVERLAP: int = 100  # перекрытие между чанками
+    CHUNK_SIZE: int = 2048  # размер чанка
+    CHUNK_OVERLAP: int = 200  # перекрытие между чанками
     SEARCH_LIMIT: int = 5  # количество найденных документов для RAG
+    ESSAY_LIMIT: int = 10
+    LITERATURE_LIMIT: int = 5
 
     # Yandex.Disk
     YADISK_TOKEN: Optional[str] = None

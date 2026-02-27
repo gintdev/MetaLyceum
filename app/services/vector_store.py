@@ -4,7 +4,7 @@ import uuid
 import numpy as np
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
-    Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+    Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, MatchAny
 )
 from app.config import settings
 
@@ -197,6 +197,43 @@ class QdrantVectorStore:
             ]
         )
         
+        return await self.search(query_vector, limit, filter_condition)
+
+    async def search_by_article_ids(
+        self,
+        query_vector: np.ndarray,
+        article_ids: List[int],
+        limit: int = settings.SEARCH_LIMIT,
+    ) -> List[Dict]:
+        """
+        Поиск похожих векторов с фильтром по списку article_id
+
+        Args:
+            query_vector: Query embedding вектор
+            article_ids: Список ID статей для фильтрации
+            limit: Количество результатов
+
+        Returns:
+            Список найденных документов
+        """
+        if not article_ids:
+            return []
+
+        match_condition = (
+            MatchValue(value=article_ids[0])
+            if len(article_ids) == 1
+            else MatchAny(any=article_ids)
+        )
+
+        filter_condition = Filter(
+            must=[
+                FieldCondition(
+                    key="article_id",
+                    match=match_condition
+                )
+            ]
+        )
+
         return await self.search(query_vector, limit, filter_condition)
     
     async def delete_by_article_id(self, article_id: int) -> int:

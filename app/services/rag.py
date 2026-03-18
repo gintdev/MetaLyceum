@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from typing import List, Dict, Optional
 import numpy as np
 
@@ -324,14 +325,28 @@ class RAGService:
             logger.info(f"Найдено {len(search_results)} чанков для контекста (гибрид)")
             # 2. Собрать контекст из чанков (сократить до 2000 символов)
             context_parts = []
+            used_chunks = []
+            source_ref_map: dict[tuple[object, object], int] = {}
             total_length = 0
             max_context_length = 2000
-            for i, chunk in enumerate(search_results, 1):
+            for chunk in search_results:
                 text = chunk.get('chunk_text') or chunk.get('text') or ''
                 text = text[:300]
                 if total_length + len(text) > max_context_length:
                     break
-                context_parts.append(f"[Источник {i}] {text}")
+
+                article_id = chunk.get("article_id")
+                filename = chunk.get("filename")
+                source_key = (article_id, filename)
+                if source_key not in source_ref_map:
+                    source_ref_map[source_key] = len(source_ref_map) + 1
+                ref_index = source_ref_map[source_key]
+
+                context_parts.append(f"[{ref_index}] {text}")
+                used_chunks.append({
+                    **chunk,
+                    "ref_index": ref_index,
+                })
                 total_length += len(text)
             context = "\n\n".join(context_parts)
 
@@ -392,6 +407,8 @@ class RAGService:
                     answer = "Ошибка: нет выбора в ответе OpenAI"
                 else:
                     answer = response.choices[0].message.content
+                    # Normalize citation style if model outputs legacy pattern like [Источник 3].
+                    answer = re.sub(r"\[(?:Источник|источник|source)\s+(\d+)\]", r"[\1]", answer)
                     print(f"DEBUG: Ответ получен, длина: {len(answer)}")
                     logger.info("✓ Ответ получен от OpenAI")
             except Exception as api_error:
@@ -406,20 +423,36 @@ class RAGService:
                 if search_results:
                     print(f"🔍 DEBUG: First result keys: {search_results[0].keys() if isinstance(search_results[0], dict) else 'not a dict'}")
                 sources = []
-                for i, chunk in enumerate(search_results):
+                pdf_files = []
+                seen_file_keys = set()
+                for chunk in used_chunks:
                     text = chunk.get("chunk_text") or chunk.get("text") or "N/A"
+                    filename = chunk.get("filename")
+                    article_id = chunk.get("article_id")
+                    ref_index = chunk.get("ref_index")
                     source = {
                         "score": chunk.get("score"),
-                        "article_id": chunk.get("article_id"),
-                        "filename": chunk.get("filename"),
+                        "article_id": article_id,
+                        "filename": filename,
+                        "ref_index": ref_index,
                         "text": (text[:200] + "...") if text != "N/A" else "N/A"
                     }
                     sources.append(source)
+
+                    file_key = (article_id, filename)
+                    if filename and file_key not in seen_file_keys:
+                        seen_file_keys.add(file_key)
+                        pdf_files.append({
+                            "filename": filename,
+                            "article_id": article_id,
+                            "ref_index": ref_index,
+                        })
                 result = {
                     "query": query,
                     "answer": answer,
                     "sources": sources,
-                    "chunks_count": len(search_results),
+                    "pdf_files": pdf_files,
+                    "chunks_count": len(used_chunks),
                     "status": "success"
                 }
                 print(f"DEBUG: Результат сформирован успешно")

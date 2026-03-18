@@ -134,6 +134,18 @@ class PDFProcessor:
         except Exception as e:
             logger.error(f"✗ Ошибка при обработке PDF {filename}: {str(e)}")
             raise
+
+    async def download_pdf(self, filename: str) -> str:
+        """
+        Скачать PDF и вернуть путь к локальному временному файлу.
+
+        Args:
+            filename: Имя файла на Яндекс Диске
+
+        Returns:
+            Локальный путь к скачанному PDF
+        """
+        return await self.download_pdf_from_yadisk(filename)
     
     def cleanup_temp_file(self, pdf_path: str):
         """

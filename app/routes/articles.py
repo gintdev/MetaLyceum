@@ -1,8 +1,11 @@
 from sqlalchemy.exc import IntegrityError
 from typing import List, Annotated
 import asyncio
+import re
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
-from sqlalchemy import select, func, Text, cast
+from fastapi.responses import FileResponse
+from sqlalchemy import select, func, Text, cast, or_
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,8 +17,134 @@ from app.schemas import (
     SearchRequest, SearchResponse, ChunkResult, VectorStoreInfo
 )
 from app.services.rag import get_rag_service
+from app.services.pdf_processor import get_pdf_processor
 
 router = APIRouter(prefix="/articles", tags=["articles"])
+
+
+def _safe_pdf_download_name(
+    requested_filename: str,
+    title: str | None,
+    authors: list[str] | None,
+    published_year: int | None,
+) -> str:
+    """Build content-disposition filename in format: Authors - title, year.pdf."""
+    base_stem = Path(requested_filename).name
+    if base_stem.lower().endswith(".pdf"):
+        base_stem = base_stem[:-4]
+
+    title_part = (title or "").strip() or base_stem or "untitled"
+    authors_part = ", ".join([a.strip() for a in (authors or []) if a and a.strip()]) or "Unknown authors"
+    year_part = str(published_year) if published_year else "n.d."
+
+    raw_name = f"{authors_part} - {title_part}, {year_part}.pdf"
+    # Strip control and path separator chars to avoid malformed response headers.
+    safe_name = re.sub(r"[\r\n\t\x00-\x1f\x7f/\\]+", " ", raw_name)
+    safe_name = re.sub(r"\s+", " ", safe_name).strip(" .")
+    return safe_name or "download.pdf"
+
+
+async def _find_article_for_file(
+    session: AsyncSession,
+    filename: str,
+    article_id: int | None = None,
+) -> Article | None:
+    """Resolve article by id first, then by full filename/path variants."""
+    if article_id is not None:
+        article_by_id = await session.execute(select(Article).where(Article.id == article_id))
+        found = article_by_id.scalar_one_or_none()
+        if found:
+            return found
+
+    normalized_filename = filename.replace("\\", "/")
+    requested_basename = Path(normalized_filename).name
+
+    article_result = await session.execute(
+        select(Article).where(
+            or_(
+                Article.file_name == filename,
+                Article.file_name == normalized_filename,
+                Article.file_name == requested_basename,
+                Article.file_name.like(f"%/{requested_basename}"),
+                Article.file_name.ilike(f"%{requested_basename}"),
+            )
+        )
+    )
+    return article_result.scalars().first()
+
+
+async def _enrich_pdf_files_with_display_names(
+    session: AsyncSession,
+    pdf_files: list[dict],
+) -> list[dict]:
+    """Attach display_name built from article metadata while preserving filename for download URL."""
+    enriched_items: list[dict] = []
+    for file_item in pdf_files:
+        filename = file_item.get("filename")
+        if not filename:
+            continue
+
+        article = await _find_article_for_file(
+            session=session,
+            filename=filename,
+            article_id=file_item.get("article_id"),
+        )
+        display_name = _safe_pdf_download_name(
+            requested_filename=filename,
+            title=article.title if article else None,
+            authors=article.authors if article else None,
+            published_year=article.published_year if article else None,
+        )
+
+        enriched_items.append({
+            **file_item,
+            "display_name": display_name,
+        })
+
+    return enriched_items
+
+
+def _build_literature_answer_from_sources(
+    pdf_files: list[dict],
+    sources: list[dict],
+) -> str:
+    """Build literature recommendations only from retrieved sources to avoid hallucinations."""
+    if not pdf_files:
+        return "К сожалению, в базе знаний не найдено релевантных материалов для рекомендации."
+
+    snippets_by_ref: dict[int, str] = {}
+    for source in sources:
+        ref_index = source.get("ref_index")
+        if not isinstance(ref_index, int) or ref_index in snippets_by_ref:
+            continue
+
+        text = (source.get("text") or "").strip()
+        if not text or text == "N/A":
+            continue
+
+        clean_text = re.sub(r"\s+", " ", text)
+        snippets_by_ref[ref_index] = clean_text[:220]
+
+    sorted_files = sorted(
+        pdf_files,
+        key=lambda item: (
+            item.get("ref_index") if isinstance(item.get("ref_index"), int) else 10**9,
+            item.get("filename") or "",
+        ),
+    )
+
+    lines = ["Рекомендованные источники из базы знаний:"]
+    for idx, file_item in enumerate(sorted_files, 1):
+        ref_index = file_item.get("ref_index") if isinstance(file_item.get("ref_index"), int) else idx
+        source_name = (file_item.get("display_name") or file_item.get("filename") or f"Источник {ref_index}").strip()
+        snippet = snippets_by_ref.get(ref_index)
+
+        if snippet:
+            lines.append(f"{ref_index}. {source_name} - Релевантно по найденному фрагменту: {snippet}")
+        else:
+            lines.append(f"{ref_index}. {source_name} - Релевантно вашему запросу по результатам поиска в базе.")
+
+    return "\n\n".join(lines)
 
 
 async def _get_filtered_article_ids(
@@ -582,6 +711,42 @@ async def get_vector_store_stats() -> VectorStoreInfo:
             detail=f"Ошибка при получении статистики: {str(e)}"
         )
 
+
+@router.get(
+    "/files/source-pdf",
+    summary="Скачать PDF источника",
+    description="Скачивает оригинальный PDF по filename с Яндекс Диска и отдает пользователю"
+)
+async def download_source_pdf(
+    background_tasks: BackgroundTasks,
+    filename: str = Query(..., min_length=1, max_length=1024, description="Имя файла на Яндекс Диске"),
+    session: AsyncSession = Depends(get_db),
+):
+    try:
+        pdf_processor = get_pdf_processor()
+        local_path = await pdf_processor.download_pdf(filename)
+
+        background_tasks.add_task(pdf_processor.cleanup_temp_file, local_path)
+
+        article = await _find_article_for_file(session=session, filename=filename)
+        download_name = _safe_pdf_download_name(
+            requested_filename=filename,
+            title=article.title if article else None,
+            authors=article.authors if article else None,
+            published_year=article.published_year if article else None,
+        )
+
+        return FileResponse(
+            path=local_path,
+            media_type="application/pdf",
+            filename=download_name,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при скачивании PDF: {str(e)}"
+        )
+
 # Ответ на вопрос
 @router.post(
     "/ask",
@@ -607,6 +772,7 @@ async def ask_question(
                 "query": request.query,
                 "answer": "К сожалению, по заданным фильтрам статьи не найдены.",
                 "sources": [],
+                "pdf_files": [],
                 "chunks_used": 0,
                 "status": "no_results"
             }
@@ -618,6 +784,10 @@ async def ask_question(
             query_type=request.query_type,
             article_ids=filtered_article_ids,
         )
+        pdf_files = await _enrich_pdf_files_with_display_names(
+            session=session,
+            pdf_files=result.get("pdf_files", []),
+        )
         
         print(f"DEBUG endpoint: result keys = {result.keys()}")
         print(f"DEBUG endpoint: sources = {result.get('sources')}")
@@ -626,6 +796,7 @@ async def ask_question(
             "query": result["query"],
             "answer": result["answer"],
             "sources": result.get("sources", []),
+            "pdf_files": pdf_files,
             "chunks_used": result["chunks_count"],
             "status": result["status"]
         }
@@ -656,6 +827,7 @@ async def write_essay(
                 "query": request.query,
                 "answer": "К сожалению, по заданным фильтрам статьи не найдены.",
                 "sources": [],
+                "pdf_files": [],
                 "chunks_used": 0,
                 "status": "no_results"
             }
@@ -667,13 +839,20 @@ async def write_essay(
             query_type = 1,
             article_ids=filtered_article_ids,
         )
+        pdf_files = await _enrich_pdf_files_with_display_names(
+            session=session,
+            pdf_files=result.get("pdf_files", []),
+        )
+        sources = result.get("sources", [])
+        answer = _build_literature_answer_from_sources(pdf_files=pdf_files, sources=sources)
         print(f"DEBUG endpoint: result keys = {result.keys()}")
         print(f"DEBUG endpoint: sources = {result.get('sources')}")
 
         return {
             "query": result["query"],
-            "answer": result["answer"],
-            "sources": result.get("sources", []),
+            "answer": answer,
+            "sources": sources,
+            "pdf_files": pdf_files,
             "chunks_used": result["chunks_count"],
             "status": result["status"]
         }
@@ -703,6 +882,7 @@ async def recomend_literature(
                 "query": request.query,
                 "answer": "К сожалению, по заданным фильтрам статьи не найдены.",
                 "sources": [],
+                "pdf_files": [],
                 "chunks_used": 0,
                 "status": "no_results"
             }
@@ -714,6 +894,10 @@ async def recomend_literature(
             query_type = 2,
             article_ids=filtered_article_ids,
         )
+        pdf_files = await _enrich_pdf_files_with_display_names(
+            session=session,
+            pdf_files=result.get("pdf_files", []),
+        )
         print(f"DEBUG endpoint: result keys = {result.keys()}")
         print(f"DEBUG endpoint: sources = {result.get('sources')}")
 
@@ -721,6 +905,7 @@ async def recomend_literature(
             "query": result["query"],
             "answer": result["answer"],
             "sources": result.get("sources", []),
+            "pdf_files": pdf_files,
             "chunks_used": result["chunks_count"],
             "status": result["status"]
         }

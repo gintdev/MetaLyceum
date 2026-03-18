@@ -1,15 +1,18 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
+import logo from './assets/img/logo.png'
 
 type Message = {
   id: number
   role: 'user' | 'assistant'
   text: string
+  attachments?: Array<{ filename: string; article_id?: number; display_name?: string; ref_index?: number }>
 }
 
 type AskResponse = {
   query: string
   answer: string
   sources: Array<Record<string, unknown>>
+  pdf_files?: Array<{ filename: string; article_id?: number; display_name?: string; ref_index?: number }>
   chunks_used: number
   status: string
 }
@@ -120,7 +123,7 @@ export default function App() {
   const canSend = useMemo(() => input.trim().length > 0 && !isLoading, [input, isLoading])
 
   const sourceButtonLabel = useMemo(() => {
-    if (selectedSources.length === 0) return 'Выбрать source'
+    if (selectedSources.length === 0) return 'источник'
     if (selectedSources.length === 1) return selectedSources[0]
     return `Выбрано источников: ${selectedSources.length}`
   }, [selectedSources])
@@ -131,6 +134,10 @@ export default function App() {
         ? prev.filter((item) => item !== sourceValue)
         : [...prev, sourceValue]
     )
+  }
+
+  const handleLogoClick = () => {
+    window.location.reload()
   }
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -198,7 +205,8 @@ export default function App() {
       const botMessage: Message = {
         id: Date.now() + 1,
         role: 'assistant',
-        text: data.answer || 'Пустой ответ от сервера'
+        text: data.answer || 'Пустой ответ от сервера',
+        attachments: data.pdf_files ?? []
       }
 
       setMessages((prev) => [...prev, botMessage])
@@ -212,8 +220,22 @@ export default function App() {
 
   return (
     <main className="container">
-      <h1 className="title">MetaLyceum</h1>
-      <p className="subtitle">Задате вопрос на интересующую тему</p>
+      <header className="brandHeader">
+        <button
+          type="button"
+          className="logoButton"
+          onClick={handleLogoClick}
+          aria-label="Обновить страницу"
+          title="Обновить страницу"
+        >
+          <img src={logo} alt="MetaLyceum" className="logoImage" />
+        </button>
+
+        <div className="brandText">
+          <h1 className="title">MetaLyceum</h1>
+          <p className="subtitle">AI philosophy teacher</p>
+        </div>
+      </header>
 
       <section className="modeSwitch" aria-label="Выбор режима ответа">
         {QUERY_MODES.map((mode) => (
@@ -230,14 +252,30 @@ export default function App() {
       </section>
 
       <section className="chatBox">
-        {messages.length === 0 && <p className="placeholder">Здесь появится диалог</p>}
+        {messages.length === 0 && <p className="placeholder">Cogito, ergo sum</p>}
         {messages.map((message) => (
           <article
             key={message.id}
             className={message.role === 'user' ? 'message messageUser' : 'message messageAssistant'}
           >
-            <div className="messageRole">{message.role === 'user' ? 'Вы' : 'Бот'}</div>
+            <div className="messageRole">{message.role === 'user' ? 'Вы' : 'Диоген'}</div>
             <div>{message.text}</div>
+            {message.role === 'assistant' && (message.attachments?.length ?? 0) > 0 && (
+              <div className="messageAttachments">
+                <div className="messageAttachmentsTitle">PDF источники:</div>
+                {message.attachments?.map((file, index) => (
+                  <a
+                    key={`${file.filename}-${index}`}
+                    href={`${API_URL}/articles/files/source-pdf?filename=${encodeURIComponent(file.filename)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="messageAttachmentLink"
+                  >
+                    [{file.ref_index ?? index + 1}] {file.display_name ?? file.filename}
+                  </a>
+                ))}
+              </div>
+            )}
           </article>
         ))}
       </section>
@@ -245,7 +283,7 @@ export default function App() {
       <form className="form" onSubmit={handleSubmit}>
         <textarea
           className="input"
-          placeholder="Введите вопрос..."
+          placeholder="Спросите MetaLyceum..."
           value={input}
           onChange={(event) => setInput(event.target.value)}
           rows={3}
@@ -255,7 +293,7 @@ export default function App() {
           <div className="filterGrid">
             <input
               className="filterInput"
-              placeholder="keywords (через запятую)"
+              placeholder="ключевые слова"
               value={keywordsInput}
               onChange={(event) => setKeywordsInput(event.target.value)}
               onFocus={() => setShowKeywordSuggestions(true)}
@@ -303,22 +341,28 @@ export default function App() {
                 </div>
               )}
             </div>
-            <input
-              className="filterInput"
-              type="number"
-              placeholder="publication_date_from"
-              value={publicationDateFrom}
-              onChange={(event) => setPublicationDateFrom(event.target.value)}
-              disabled={isLoading}
-            />
-            <input
-              className="filterInput"
-              type="number"
-              placeholder="publication_date_to"
-              value={publicationDateTo}
-              onChange={(event) => setPublicationDateTo(event.target.value)}
-              disabled={isLoading}
-            />
+
+            <div className="publicationYearSection">
+              <div className="publicationYearTitle">Год публикации</div>
+              <div className="publicationYearInputs">
+                <input
+                  className="filterInput"
+                  type="number"
+                  placeholder="С"
+                  value={publicationDateFrom}
+                  onChange={(event) => setPublicationDateFrom(event.target.value)}
+                  disabled={isLoading}
+                />
+                <input
+                  className="filterInput"
+                  type="number"
+                  placeholder="По"
+                  value={publicationDateTo}
+                  onChange={(event) => setPublicationDateTo(event.target.value)}
+                  disabled={isLoading}
+                />
+              </div>
+            </div>
           </div>
         </section>
         <button className="button" type="submit" disabled={!canSend}>

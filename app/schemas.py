@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field, AliasChoices
-from typing import Optional, List
+from pydantic import BaseModel, EmailStr, Field, AliasChoices
+from typing import Optional, List, Literal, Any
 from datetime import datetime
 
 
@@ -111,7 +111,6 @@ class ProcessArticleResponse(BaseModel):
 class SearchRequest(BaseModel):
     """Запрос на поиск в RAG"""
     query: str = Field(..., min_length=1, max_length=2048, description="Поисковый запрос")
-    article_id: Optional[int] = Field(None, description="ID статьи для фильтрации (опционально)")
     limit: int = Field(5, ge=1, le=100, description="Количество результатов")
     query_type: int = Field(0, ge=0, le=2, description="Тип ответа: 0 - базовый, 1 - эссе, 2 - рекомендация литературы")
     keyword: Optional[str] = Field(None, min_length=1, max_length=256, description="Ключевое слово для фильтрации статей")
@@ -137,7 +136,6 @@ class SearchRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "query": "Что такое трансцендентальная логика?",
-                "article_id": None,
                 "limit": 5,
                 "query_type": 0,
                 "keywords": ["эпистемология", "разум"],
@@ -172,3 +170,103 @@ class VectorStoreInfo(BaseModel):
     name: str
     documents_count: int
     points_count: int
+
+
+# ===== Auth / Chat Schemas =====
+
+
+class GoogleAuthRequest(BaseModel):
+    credential: str = Field(..., min_length=20, description="Google ID token from GIS")
+
+
+class UserResponse(BaseModel):
+    id: int
+    email: EmailStr
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+
+class ChatCreateRequest(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+
+
+class ChatUpdateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+
+
+class ChatListItem(BaseModel):
+    id: int
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    last_message_preview: Optional[str] = None
+
+
+class ChatResponse(BaseModel):
+    id: int
+    user_id: int
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MessageResponse(BaseModel):
+    id: int
+    chat_id: int
+    role: Literal["user", "assistant", "system"]
+    content: str
+    sources: List[Any] = Field(default_factory=list)
+    query_type: Optional[int] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MessageListResponse(BaseModel):
+    items: List[MessageResponse]
+
+
+class ChatAskRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=2048)
+    limit: int = Field(5, ge=1, le=100)
+    query_type: int = Field(0, ge=0, le=2)
+    keyword: Optional[str] = Field(None, min_length=1, max_length=256)
+    keywords: Optional[List[str]] = None
+    source: Optional[str] = Field(None, min_length=1, max_length=256)
+    sources: Optional[List[str]] = None
+    year_from: Optional[int] = Field(
+        None,
+        ge=1900,
+        le=2100,
+        validation_alias=AliasChoices("year_from", "publication_year_from", "publication_date_from")
+    )
+    year_to: Optional[int] = Field(
+        None,
+        ge=1900,
+        le=2100,
+        validation_alias=AliasChoices("year_to", "publication_year_to", "publication_date_to")
+    )
+
+
+class ChatAskResponse(BaseModel):
+    chat_id: int
+    query: str
+    answer: str
+    sources: List[Any]
+    pdf_files: List[dict]
+    chunks_used: int
+    status: str

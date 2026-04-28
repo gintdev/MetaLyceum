@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     OPENAI_EMBEDDING_DIMENSIONS: int = 1536
     OPENAI_QUANTIZATION: str = "float"  # 'float' или 'binary'
     OPENAI_CHAT_MODEL: str = "gpt-4o"  # модель для генерации ответов
+
+    # Auth / JWT
+    JWT_SECRET_KEY: str = "change-me-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
+    GOOGLE_CLIENT_ID: Optional[str] = None
     
     # RAG Configuration
     CHUNK_SIZE: int = 2048  # размер чанка

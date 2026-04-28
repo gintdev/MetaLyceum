@@ -174,16 +174,10 @@ async def _get_filtered_article_ids(
             detail="Нижняя граница года не может быть больше верхней"
         )
 
-    if request.article_id is not None and not has_metadata_filters:
-        return [request.article_id]
-
-    if not has_metadata_filters and request.article_id is None:
+    if not has_metadata_filters:
         return None
 
     stmt = select(Article.id)
-
-    if request.article_id is not None:
-        stmt = stmt.where(Article.id == request.article_id)
 
     if sources_filter:
         stmt = stmt.where(Article.source.in_(sources_filter))
@@ -598,8 +592,7 @@ async def search_all_articles(
             return SearchResponse(
                 query=request.query,
                 results=[],
-                count=0,
-                article_id=request.article_id
+                count=0
             )
 
         rag_service = await get_rag_service()
@@ -615,8 +608,7 @@ async def search_all_articles(
         return SearchResponse(
             query=request.query,
             results=chunk_results,
-            count=len(chunk_results),
-            article_id=request.article_id
+            count=len(chunk_results)
         )
         
     except Exception as e:
@@ -646,7 +638,6 @@ async def search_in_article(
     - **limit**: Максимальное количество результатов (по умолчанию 5)
     """
     try:
-        request.article_id = article_id
         filtered_article_ids = await _get_filtered_article_ids(request, session)
         if filtered_article_ids is not None and article_id not in filtered_article_ids:
             return SearchResponse(

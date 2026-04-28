@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.db import init_db
-from app.routes import articles
+from app.routes import articles, auth, chats
 from app.services.rag import get_rag_service
 
 # Инициализация базы данных и RAG сервиса при запуске приложения
@@ -47,6 +47,8 @@ app.add_middleware(
 
 # Подключение маршрутов
 app.include_router(articles.router)
+app.include_router(auth.router)
+app.include_router(chats.router)
 
 
 # Health check endpoint
@@ -86,6 +88,8 @@ async def read_root():
         "endpoints": {
             "articles": "/articles/",
             "rag_search": "/articles/search",
+            "auth": "/auth/",
+            "chats": "/chats/",
             "health": "/health"
         }
     }

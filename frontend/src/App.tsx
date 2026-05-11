@@ -92,15 +92,16 @@ const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
 const TOKEN_KEY = 'metalyceum_jwt'
 
-function extractAttachmentsFromSources(sources: Array<Record<string, unknown>>): Array<{ filename: string }> {
+function extractAttachmentsFromSources(sources: Array<Record<string, unknown>>): Array<{ filename: string; display_name?: string }> {
   const seen = new Set<string>()
-  const files: Array<{ filename: string }> = []
+  const files: Array<{ filename: string; display_name?: string }> = []
 
   for (const source of sources) {
     const filename = typeof source.filename === 'string' ? source.filename : null
+    const displayName = typeof source.display_name === 'string' ? source.display_name : null
     if (!filename || seen.has(filename)) continue
     seen.add(filename)
-    files.push({ filename })
+    files.push({ filename, display_name: displayName ?? undefined })
   }
 
   return files
@@ -512,7 +513,7 @@ export default function App() {
         <section className="authCard">
           <img src={logo} alt="MetaLyceum" className="authLogo" />
           <h1>MetaLyceum</h1>
-          <p className="authSubtitle">Вход только через Google, чтобы сохранять историю чатов</p>
+          <p className="authSubtitle">Войдите, чтобы продолжить</p>
 
           <div className="authGoogleWrap">
             {isAuthLoading && <div className="authHint">Проверяем Google токен...</div>}
@@ -615,7 +616,7 @@ export default function App() {
                           rel="noreferrer"
                           className="messageAttachmentLink"
                         >
-                          {file.filename}
+                          {file.display_name ?? file.filename}
                         </a>
                       ))}
                     </div>

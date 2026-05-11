@@ -9,7 +9,7 @@ from app.db import get_db
 from app.models.chat import Chat
 from app.models.message import Message
 from app.models.user import User
-from app.routes.articles import _enrich_pdf_files_with_display_names, _get_filtered_article_ids
+from app.routes.articles import _enrich_pdf_files_with_display_names, _enrich_sources_with_display_names, _get_filtered_article_ids
 from app.schemas import (
     ChatAskRequest,
     ChatAskResponse,
@@ -238,7 +238,12 @@ async def ask_in_chat(
         session=session,
         pdf_files=result.get("pdf_files", []),
     )
-    sources = _sanitize_json_value(result.get("sources", []))
+    sources = _sanitize_json_value(
+        _enrich_sources_with_display_names(
+            sources=result.get("sources", []),
+            pdf_files=pdf_files,
+        )
+    )
     answer_text = _sanitize_text(result.get("answer", "Пустой ответ от сервера"))
     query_text = _sanitize_text(result.get("query", safe_query))
 

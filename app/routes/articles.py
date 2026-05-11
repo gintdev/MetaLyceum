@@ -44,6 +44,29 @@ def _safe_pdf_download_name(
     return safe_name or "download.pdf"
 
 
+def _build_pdf_citation_display_name(
+    requested_filename: str,
+    title: str | None,
+    authors: list[str] | None,
+    published_year: int | None,
+    ref_index: int | None,
+) -> str:
+    """Build citation-style display name in format: [n] author title year.pdf."""
+    base_stem = Path(requested_filename).name
+    if base_stem.lower().endswith(".pdf"):
+        base_stem = base_stem[:-4]
+
+    title_part = (title or "").strip() or base_stem or "untitled"
+    first_author = next((a.strip() for a in (authors or []) if a and a.strip()), "Unknown author")
+    year_part = str(published_year) if published_year else "n.d."
+    ref_prefix = f"[{ref_index}] " if isinstance(ref_index, int) and ref_index > 0 else ""
+
+    raw_name = f"{ref_prefix}{first_author} {title_part} {year_part}.pdf"
+    safe_name = re.sub(r"[\r\n\t\x00-\x1f\x7f/\\]+", " ", raw_name)
+    safe_name = re.sub(r"\s+", " ", safe_name).strip(" .")
+    return safe_name or "download.pdf"
+
+
 async def _find_article_for_file(
     session: AsyncSession,
     filename: str,
@@ -89,11 +112,12 @@ async def _enrich_pdf_files_with_display_names(
             filename=filename,
             article_id=file_item.get("article_id"),
         )
-        display_name = _safe_pdf_download_name(
+        display_name = _build_pdf_citation_display_name(
             requested_filename=filename,
             title=article.title if article else None,
             authors=article.authors if article else None,
             published_year=article.published_year if article else None,
+            ref_index=file_item.get("ref_index") if isinstance(file_item.get("ref_index"), int) else None,
         )
 
         enriched_items.append({
@@ -102,6 +126,37 @@ async def _enrich_pdf_files_with_display_names(
         })
 
     return enriched_items
+
+
+def _enrich_sources_with_display_names(
+    sources: list[dict],
+    pdf_files: list[dict],
+) -> list[dict]:
+    """Attach display_name to each source by (article_id, filename, ref_index)."""
+    display_name_by_key: dict[tuple[object, object, object], str] = {}
+    for file_item in pdf_files:
+        key = (file_item.get("article_id"), file_item.get("filename"), file_item.get("ref_index"))
+        display_name = file_item.get("display_name")
+        if isinstance(display_name, str) and display_name.strip():
+            display_name_by_key[key] = display_name.strip()
+
+    enriched_sources: list[dict] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+
+        key = (source.get("article_id"), source.get("filename"), source.get("ref_index"))
+        display_name = display_name_by_key.get(key)
+        if not display_name:
+            enriched_sources.append(source)
+            continue
+
+        enriched_sources.append({
+            **source,
+            "display_name": display_name,
+        })
+
+    return enriched_sources
 
 
 def _build_literature_answer_from_sources(
@@ -779,6 +834,10 @@ async def ask_question(
             session=session,
             pdf_files=result.get("pdf_files", []),
         )
+        sources = _enrich_sources_with_display_names(
+            sources=result.get("sources", []),
+            pdf_files=pdf_files,
+        )
         
         print(f"DEBUG endpoint: result keys = {result.keys()}")
         print(f"DEBUG endpoint: sources = {result.get('sources')}")
@@ -786,7 +845,7 @@ async def ask_question(
         return {
             "query": result["query"],
             "answer": result["answer"],
-            "sources": result.get("sources", []),
+            "sources": sources,
             "pdf_files": pdf_files,
             "chunks_used": result["chunks_count"],
             "status": result["status"]
@@ -834,7 +893,10 @@ async def write_essay(
             session=session,
             pdf_files=result.get("pdf_files", []),
         )
-        sources = result.get("sources", [])
+        sources = _enrich_sources_with_display_names(
+            sources=result.get("sources", []),
+            pdf_files=pdf_files,
+        )
         answer = _build_literature_answer_from_sources(pdf_files=pdf_files, sources=sources)
         print(f"DEBUG endpoint: result keys = {result.keys()}")
         print(f"DEBUG endpoint: sources = {result.get('sources')}")
@@ -889,13 +951,17 @@ async def recomend_literature(
             session=session,
             pdf_files=result.get("pdf_files", []),
         )
+        sources = _enrich_sources_with_display_names(
+            sources=result.get("sources", []),
+            pdf_files=pdf_files,
+        )
         print(f"DEBUG endpoint: result keys = {result.keys()}")
         print(f"DEBUG endpoint: sources = {result.get('sources')}")
 
         return {
             "query": result["query"],
             "answer": result["answer"],
-            "sources": result.get("sources", []),
+            "sources": sources,
             "pdf_files": pdf_files,
             "chunks_used": result["chunks_count"],
             "status": result["status"]

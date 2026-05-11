@@ -1,6 +1,9 @@
 import logging
 import os
 import re
+import json
+import asyncio
+from datetime import datetime, timezone
 from typing import List, Dict, Optional
 import numpy as np
 
@@ -13,6 +16,27 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _build_requests_logger() -> logging.Logger:
+    requests_logger = logging.getLogger("rag_requests")
+    if requests_logger.handlers:
+        return requests_logger
+
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    logs_dir = os.path.join(project_root, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+
+    file_handler = logging.FileHandler(os.path.join(logs_dir, "requests.log"), encoding="utf-8")
+    file_handler.setFormatter(logging.Formatter("%(message)s"))
+
+    requests_logger.setLevel(logging.INFO)
+    requests_logger.addHandler(file_handler)
+    requests_logger.propagate = False
+    return requests_logger
+
+
+requests_logger = _build_requests_logger()
+
+
 class RAGService:
     """
     RAG (Retrieval Augmented Generation) сервис
@@ -20,9 +44,6 @@ class RAGService:
     """
 
     async def translate_to_english(self, text: str) -> str:
-        """
-        Перевести текст на английский язык через OpenAI Chat API
-        """
         try:
             logger.info(f"Перевод запроса на английский: {text[:50]}...")
             system_prompt = "You are a translation assistant. Translate the following text to English. Return only the translation, no explanations."
@@ -38,13 +59,13 @@ class RAGService:
             )
             if response and hasattr(response, 'choices') and response.choices:
                 translation = response.choices[0].message.content.strip()
-                logger.info(f"✓ Перевод выполнен: {translation[:50]}")
+                logger.info(f"Перевод выполнен: {translation[:50]}")
                 return translation
             else:
                 logger.warning("Не удалось получить перевод через OpenAI")
                 return text
         except Exception as e:
-            logger.error(f"✗ Ошибка при переводе: {str(e)}")
+            logger.error(f"Ошибка при переводе: {str(e)}")
             return text
 
     async def hybrid_search(
@@ -65,7 +86,6 @@ class RAGService:
         Returns:
             Список уникальных чанков, отсортированных по score
         """
-        logger.info(f"🔍 Гибридный поиск: оригинал + перевод для '{query[:50]}'")
         # 1. Поиск по оригиналу
         orig_results = await self.search(query, limit, article_ids=article_ids)
         # 2. Перевести запрос
@@ -115,6 +135,172 @@ class RAGService:
         self.pdf_processor = pdf_processor or PDFProcessor()
         self.text_chunker = text_chunker or TextChunker()
         self.vector_store = vector_store or QdrantVectorStore()
+        self.paraphrase_count = 5
+        self.rrf_k = 60
+        self.min_candidate_score = 0.5
+        self.per_query_pool_size = 60
+
+    async def generate_paraphrases(self, query: str, count: int = 5) -> List[str]:
+        """Generate diverse paraphrases in the same language as the original query."""
+        system_prompt = (
+            "You generate retrieval paraphrases. Return strictly JSON array of strings. "
+            "No explanations."
+        )
+        user_prompt = (
+            f"Original query: {query}\n"
+            f"Return {count} diverse paraphrases in the same language."
+        )
+        try:
+            response = await self.embedder.openai_client.chat.completions.create(
+                model=settings.OPENAI_CHAT_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.5,
+                max_tokens=300,
+            )
+            if not response or not response.choices:
+                return []
+            content = (response.choices[0].message.content or "").strip()
+            parsed = json.loads(content)
+            if not isinstance(parsed, list):
+                return []
+            cleaned = [str(item).strip() for item in parsed if str(item).strip()]
+            return cleaned[:count]
+        except Exception as exc:
+            logger.warning("Не удалось сгенерировать перефразировки: %s", exc)
+            return []
+
+    @staticmethod
+    def _chunk_key(chunk: Dict) -> str:
+        if chunk.get("id") is not None:
+            return f"id:{chunk.get('id')}"
+        return f"meta:{chunk.get('article_id')}:{chunk.get('chunk_index')}:{chunk.get('filename')}"
+
+    def _rrf_fuse_ranked_lists(self, ranked_lists: List[List[Dict]], final_limit: int) -> List[Dict]:
+        """Fuse multiple ranked result lists with classic RRF: 1 / (k + rank)."""
+        by_key: Dict[str, Dict] = {}
+
+        for ranked_list in ranked_lists:
+            for rank, item in enumerate(ranked_list, start=1):
+                key = self._chunk_key(item)
+                contribution = 1.0 / (self.rrf_k + rank)
+
+                if key not in by_key:
+                    by_key[key] = {
+                        **item,
+                        "rrf_score": 0.0,
+                        "rrf_details": [],
+                    }
+
+                by_key[key]["rrf_score"] += contribution
+                by_key[key]["rrf_details"].append(
+                    {
+                        "retriever_query": item.get("retriever_query"),
+                        "rank": rank,
+                        "contribution": contribution,
+                    }
+                )
+
+        fused = sorted(by_key.values(), key=lambda x: x["rrf_score"], reverse=True)
+        for rank, item in enumerate(fused, start=1):
+            item["rank"] = rank
+        return fused[:final_limit]
+
+    @staticmethod
+    def _serialize_chunk_for_log(item: Dict) -> Dict:
+        text = item.get("chunk_text") or item.get("text") or ""
+        return {
+            "rank": item.get("rank"),
+            "id": item.get("id"),
+            "score": item.get("score"),
+            "article_id": item.get("article_id"),
+            "filename": item.get("filename"),
+            "chunk_index": item.get("chunk_index"),
+            "retriever_query": item.get("retriever_query"),
+            "rrf_score": item.get("rrf_score"),
+            "rrf_details": item.get("rrf_details"),
+            "chunk_text": text[:500],
+        }
+
+    async def retrieve_with_paraphrase_rrf(
+        self,
+        query: str,
+        limit: int,
+        article_ids: Optional[List[int]] = None,
+    ) -> tuple[List[Dict], Dict]:
+        """Run hybrid search for original query + paraphrases and fuse with RRF."""
+        paraphrases = await self.generate_paraphrases(query, count=self.paraphrase_count)
+        all_queries = [query, *paraphrases]
+        per_query_limit = max(self.per_query_pool_size, limit)
+
+        tasks = [
+            self.hybrid_search(
+                sub_query,
+                limit=per_query_limit,
+                translation_limit=per_query_limit,
+                final_limit=per_query_limit * 2,
+                article_ids=article_ids,
+            )
+            for sub_query in all_queries
+        ]
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        ranked_lists: List[List[Dict]] = []
+        per_query_trace: Dict[str, List[Dict]] = {}
+        for sub_query, result in zip(all_queries, raw_results):
+            if isinstance(result, Exception):
+                logger.warning("Ошибка поиска по перефразировке '%s': %s", sub_query[:80], result)
+                per_query_trace[sub_query] = []
+                continue
+            filtered_result = [
+                item for item in result if float(item.get("score") or 0.0) > self.min_candidate_score
+            ]
+            ranked = [
+                {
+                    **item,
+                    "rank": rank,
+                    "retriever_query": sub_query,
+                }
+                for rank, item in enumerate(filtered_result, start=1)
+            ]
+            if ranked:
+                ranked_lists.append(ranked)
+            per_query_trace[sub_query] = [self._serialize_chunk_for_log(item) for item in ranked]
+
+        if not ranked_lists:
+            return [], {
+                "original_query": query,
+                "paraphrases": paraphrases,
+                "all_queries": all_queries,
+                "candidate_filter": {
+                    "min_score_gt": self.min_candidate_score,
+                    "per_query_limit": per_query_limit,
+                },
+                "per_query_results": per_query_trace,
+                "rrf": {
+                    "k": self.rrf_k,
+                    "top_k": [],
+                },
+            }
+
+        fused_top = self._rrf_fuse_ranked_lists(ranked_lists, final_limit=limit)
+        retrieval_trace = {
+            "original_query": query,
+            "paraphrases": paraphrases,
+            "all_queries": all_queries,
+            "candidate_filter": {
+                "min_score_gt": self.min_candidate_score,
+                "per_query_limit": per_query_limit,
+            },
+            "per_query_results": per_query_trace,
+            "rrf": {
+                "k": self.rrf_k,
+                "top_k": [self._serialize_chunk_for_log(item) for item in fused_top],
+            },
+        }
+        return fused_top, retrieval_trace
     
     async def initialize(self):
         """Инициализировать RAG сервис (создать коллекцию Qdrant)"""
@@ -306,13 +492,11 @@ class RAGService:
         article_ids: Optional[List[int]] = None,
     ) -> Dict:
         try:
-            logger.info(f"RAG запрос (гибрид): {query[:50]}...")
-            # 1. Гибридный поиск (оригинал + перевод)
-            search_results = await self.hybrid_search(
-                query,
+            logger.info(f"RAG запрос (перефразировки + RRF): {query[:50]}...")
+            # 1. Один retriever: перефразировки + hybrid-search для каждой + RRF
+            search_results, retrieval_trace = await self.retrieve_with_paraphrase_rrf(
+                query=query,
                 limit=limit,
-                translation_limit=limit,
-                final_limit=limit,
                 article_ids=article_ids,
             )
             if not search_results:
@@ -322,7 +506,7 @@ class RAGService:
                     "chunks": [],
                     "status": "no_results"
                 }
-            logger.info(f"Найдено {len(search_results)} чанков для контекста (гибрид)")
+            logger.info(f"Найдено {len(search_results)} чанков после RRF")
             # 2. Собрать контекст из чанков (сократить до 2000 символов)
             context_parts = []
             used_chunks = []
@@ -371,6 +555,21 @@ class RAGService:
             Контекст из философских статей: {context}
                 ---
             Вопрос: {query}"""
+
+            request_trace = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "query": query,
+                "top_k": len(search_results),
+                "retrieval": retrieval_trace,
+                "llm_input": {
+                    "model": settings.OPENAI_CHAT_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                },
+            }
+            requests_logger.info(json.dumps(request_trace, ensure_ascii=False))
             
             print(f"DEBUG: Начинаем запрос к OpenAI...")
             print(f"DEBUG: Model: {settings.OPENAI_CHAT_MODEL}")

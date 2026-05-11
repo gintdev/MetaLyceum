@@ -60,6 +60,8 @@ services:
       YADISK_FOLDER: ${YADISK_FOLDER:-MetaLyceum}
     ports:
       - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
     networks:
       - metalyceum
 

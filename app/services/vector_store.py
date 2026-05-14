@@ -47,7 +47,7 @@ class QdrantVectorStore:
             collection_names = [col.name for col in collections.collections]
             
             if self.collection_name not in collection_names:
-                logger.info(f"Создание коллекции: {self.collection_name}")
+                logger.debug(f"Создание коллекции: {self.collection_name}")
                 
                 await self.client.create_collection(
                     collection_name=self.collection_name,
@@ -57,9 +57,9 @@ class QdrantVectorStore:
                     )
                 )
                 
-                logger.info(f"✓ Коллекция создана успешно: {self.collection_name}")
+                logger.debug(f"Коллекция создана успешно: {self.collection_name}")
             else:
-                logger.info(f"Коллекция уже существует: {self.collection_name}")
+                logger.debug(f"Коллекция уже существует: {self.collection_name}")
                 
         except Exception as e:
             logger.error(f"✗ Ошибка при инициализации коллекции: {str(e)}")
@@ -112,7 +112,7 @@ class QdrantVectorStore:
                 points=points
             )
             
-            logger.info(f"✓ {len(points)} векторов добавлено в коллекцию {self.collection_name}")
+            logger.debug(f"✓ {len(points)} векторов добавлено в коллекцию {self.collection_name}")
             return point_ids
             
         except Exception as e:

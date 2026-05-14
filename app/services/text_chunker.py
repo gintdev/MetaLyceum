@@ -68,7 +68,7 @@ class TextChunker:
             text = " ".join(text.split())
             
             if len(text) <= self.chunk_size:
-                logger.info(f"Текст меньше размера чанка ({len(text)} символов)")
+                logger.debug(f"Текст меньше размера чанка ({len(text)} символов)")
                 return [text]
             
             chunks = []
@@ -93,7 +93,7 @@ class TextChunker:
                 # Переместиться на следующий чанк
                 start = end - self.chunk_overlap
             
-            logger.info(f"✓ Текст разбит на {len(chunks)} чанков")
+            logger.debug(f"✓ Текст разбит на {len(chunks)} чанков")
             return chunks
             
         except Exception as e:

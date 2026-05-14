@@ -32,14 +32,14 @@ class Settings(BaseSettings):
     OPENAI_CHAT_MODEL: str = "gpt-4o"  # модель для генерации ответов
 
     # Auth / JWT
-    JWT_SECRET_KEY: str = "change-me-in-production"
+    JWT_SECRET_KEY: str = "change-me"
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
     GOOGLE_CLIENT_ID: Optional[str] = None
     
     # RAG Configuration
     CHUNK_SIZE: int = 2048  # размер чанка
-    CHUNK_OVERLAP: int = 200  # перекрытие между чанками
+    CHUNK_OVERLAP: int = 512  # перекрытие между чанками
     SEARCH_LIMIT: int = 5  # количество найденных документов для RAG
     ESSAY_LIMIT: int = 10
     LITERATURE_LIMIT: int = 5

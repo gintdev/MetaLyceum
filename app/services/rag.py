@@ -3,6 +3,7 @@ import os
 import re
 import json
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
 import numpy as np
@@ -327,34 +328,45 @@ class RAGService:
             Словарь с результатами обработки
         """
         try:
-            logger.info(f"🚀 Начало обработки статьи {article_id}: {filename}")
+            started_at = time.perf_counter()
+            logger.debug("Начало обработки статьи article_id=%s filename=%s", article_id, filename)
             
             # 1. Скачать PDF и извлечь текст
-            logger.info("1️⃣ Скачивание и извлечение текста из PDF...")
+            logger.debug("Шаг 1/4: скачивание и извлечение текста из PDF")
             text = await self.pdf_processor.process_pdf(filename)
-            logger.info(f"   ✓ Текст извлечен: {len(text)} символов")
+            logger.debug("Шаг 1/4 завершен: text_length=%s", len(text))
             
             # 2. Разбить текст на чанки
-            logger.info("2️⃣ Разбиение текста на чанки...")
+            logger.debug("Шаг 2/4: разбиение текста на чанки")
             chunks = self.text_chunker.chunk_text_with_metadata(
                 text=text,
                 article_id=article_id,
                 filename=filename
             )
-            logger.info(f"   ✓ Создано {len(chunks)} чанков")
+            logger.debug("Шаг 2/4 завершен: chunks_count=%s", len(chunks))
             
             # 3. Получить embeddings для каждого чанка
-            logger.info("3️⃣ Генерирование embeddings...")
+            logger.debug("Шаг 3/4: генерация embeddings")
             chunk_texts = [chunk["chunk_text"] for chunk in chunks]
             embeddings = await self.embedder.embed_texts(chunk_texts)
-            logger.info(f"   ✓ Embeddings созданы: {len(embeddings)} векторов")
+            logger.debug("Шаг 3/4 завершен: embeddings_count=%s", len(embeddings))
             
             # 4. Сохранить в Qdrant
-            logger.info("4️⃣ Сохранение в векторной БД...")
+            logger.debug("Шаг 4/4: сохранение в векторной БД")
             point_ids = await self.vector_store.add_vectors(embeddings, chunks)
-            logger.info(f"   ✓ Сохранено {len(point_ids)} точек в Qdrant")
+            logger.debug("Шаг 4/4 завершен: stored_points=%s", len(point_ids))
             
-            logger.info(f"✅ Статья {article_id} успешно обработана")
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            logger.info(
+                "Статья обработана: article_id=%s filename=%s text_length=%s chunks=%s embeddings=%s stored_points=%s duration_ms=%s",
+                article_id,
+                filename,
+                len(text),
+                len(chunks),
+                len(embeddings),
+                len(point_ids),
+                elapsed_ms,
+            )
             
             return {
                 "article_id": article_id,
@@ -368,7 +380,7 @@ class RAGService:
             }
             
         except Exception as e:
-            logger.error(f"✗ Ошибка при обработке статьи {article_id}: {str(e)}")
+            logger.error("Ошибка при обработке статьи article_id=%s filename=%s: %s", article_id, filename, str(e))
             raise
     
     async def reprocess_article(
@@ -507,15 +519,14 @@ class RAGService:
                     "status": "no_results"
                 }
             logger.info(f"Найдено {len(search_results)} чанков после RRF")
-            # 2. Собрать контекст из чанков (сократить до 2000 символов)
+            # 2. Собрать контекст из чанков
             context_parts = []
             used_chunks = []
             source_ref_map: dict[tuple[object, object], int] = {}
             total_length = 0
-            max_context_length = 2000
+            max_context_length = 32000
             for chunk in search_results:
                 text = chunk.get('chunk_text') or chunk.get('text') or ''
-                text = text[:300]
                 if total_length + len(text) > max_context_length:
                     break
 

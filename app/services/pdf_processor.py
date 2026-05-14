@@ -2,6 +2,7 @@ import os
 import logging
 import asyncio
 import aiofiles
+import re
 from typing import Optional, List
 import yadisk
 import PyPDF2
@@ -27,6 +28,27 @@ class PDFProcessor:
     def _ensure_temp_dir(self):
         """Создать директорию для временных файлов если её нет"""
         os.makedirs(self.temp_dir, exist_ok=True)
+
+    def _sanitize_text(self, text: str) -> str:
+        """Очистить извлеченный текст от URL, нулевых байтов и мусорных символов."""
+        if not text:
+            return ""
+
+        # Удаляем нулевые байты и ссылки.
+        cleaned = text.replace("\x00", " ")
+        cleaned = re.sub(r"(?:https?://|www\.)\S+", " ", cleaned, flags=re.IGNORECASE)
+
+        # Удаляем непечатаемые/некорректные символы, сохраняя переносы и табы.
+        cleaned = "".join(
+            ch if (ch.isprintable() or ch in "\n\t") and ch != "\ufffd" else " "
+            for ch in cleaned
+        )
+
+        # Нормализуем пробелы и пустые строки.
+        cleaned = re.sub(r"[ \t]+", " ", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+
+        return cleaned.strip()
     
     async def download_pdf_from_yadisk(self, filename: str) -> str:
         """
@@ -63,8 +85,8 @@ class PDFProcessor:
             # Создать папку если нужна
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
             
-            logger.info(f"📥 Скачивание: {yadisk_path}")
-            logger.info(f"   → {local_path}")
+            logger.debug(f"📥 Скачивание: {yadisk_path}")
+            logger.debug(f"   → {local_path}")
             
             # Скачивание файла (асинхронный запрос в отдельном потоке)
             loop = asyncio.get_event_loop()
@@ -73,7 +95,7 @@ class PDFProcessor:
                 lambda: y.download(yadisk_path, local_path)
             )
             
-            logger.info(f"✓ PDF скачан успешно")
+            logger.debug("✓ PDF скачан успешно")
             return local_path
             
         except Exception as e:
@@ -104,8 +126,9 @@ class PDFProcessor:
                         text.append(page.extract_text())
                 return "\n".join(text)
             
-            text = await loop.run_in_executor(None, _extract)
-            logger.info(f"✓ Текст извлечен из PDF: {len(text)} символов")
+            raw_text = await loop.run_in_executor(None, _extract)
+            text = self._sanitize_text(raw_text)
+            logger.debug(f"✓ Текст извлечен и очищен из PDF: {len(text)} символов")
             return text
             
         except Exception as e:
@@ -157,7 +180,7 @@ class PDFProcessor:
         try:
             if os.path.exists(pdf_path):
                 os.remove(pdf_path)
-                logger.info(f"✓ Временный файл удален: {pdf_path}")
+                logger.debug(f"✓ Временный файл удален: {pdf_path}")
         except Exception as e:
             logger.warning(f"⚠ Ошибка при удалении файла {pdf_path}: {str(e)}")
 

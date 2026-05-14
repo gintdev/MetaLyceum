@@ -28,7 +28,7 @@ def _safe_pdf_download_name(
     authors: list[str] | None,
     published_year: int | None,
 ) -> str:
-    """Build content-disposition filename in format: Authors - title, year.pdf."""
+    """format: Authors - title, year.pdf."""
     base_stem = Path(requested_filename).name
     if base_stem.lower().endswith(".pdf"):
         base_stem = base_stem[:-4]
@@ -51,7 +51,7 @@ def _build_pdf_citation_display_name(
     published_year: int | None,
     ref_index: int | None,
 ) -> str:
-    """Build citation-style display name in format: [n] author title year.pdf."""
+    
     base_stem = Path(requested_filename).name
     if base_stem.lower().endswith(".pdf"):
         base_stem = base_stem[:-4]
@@ -72,7 +72,6 @@ async def _find_article_for_file(
     filename: str,
     article_id: int | None = None,
 ) -> Article | None:
-    """Resolve article by id first, then by full filename/path variants."""
     if article_id is not None:
         article_by_id = await session.execute(select(Article).where(Article.id == article_id))
         found = article_by_id.scalar_one_or_none()
@@ -100,7 +99,6 @@ async def _enrich_pdf_files_with_display_names(
     session: AsyncSession,
     pdf_files: list[dict],
 ) -> list[dict]:
-    """Attach display_name built from article metadata while preserving filename for download URL."""
     enriched_items: list[dict] = []
     for file_item in pdf_files:
         filename = file_item.get("filename")
@@ -132,7 +130,6 @@ def _enrich_sources_with_display_names(
     sources: list[dict],
     pdf_files: list[dict],
 ) -> list[dict]:
-    """Attach display_name to each source by (article_id, filename, ref_index)."""
     display_name_by_key: dict[tuple[object, object, object], str] = {}
     for file_item in pdf_files:
         key = (file_item.get("article_id"), file_item.get("filename"), file_item.get("ref_index"))
@@ -163,7 +160,6 @@ def _build_literature_answer_from_sources(
     pdf_files: list[dict],
     sources: list[dict],
 ) -> str:
-    """Build literature recommendations only from retrieved sources to avoid hallucinations."""
     if not pdf_files:
         return "К сожалению, в базе знаний не найдено релевантных материалов для рекомендации."
 
@@ -206,10 +202,6 @@ async def _get_filtered_article_ids(
     request: SearchRequest,
     session: AsyncSession,
 ) -> List[int] | None:
-    """
-    Вернуть список article_id по фильтрам из запроса.
-    Если фильтров нет — вернуть None (поиск по всем статьям).
-    """
     keywords_filter = []
     if request.keyword and request.keyword.strip():
         keywords_filter.append(request.keyword.strip())
@@ -268,20 +260,6 @@ async def create_article(
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db)
 ) -> ArticleCreateResponse:
-    """
-    Создает новую статью в базе данных и опционально запускает обработку для RAG.
-    
-    - **title**: название статьи (обязательно)
-    - **source**: источник статьи (обязательно)
-    - **abstract**: аннотация статьи
-    - **authors**: список авторов
-    - **keywords**: ключевые слова
-    - **published_year**: год публикации
-    - **file_name**: имя файла на Яндекс Диске
-    - **download_url**: URL для скачивания
-    - **parsed_at**: время парсинга
-    - **process**: обработать для RAG сразу же (по умолчанию True)
-    """
     try:
         # Сохранить метаданные статьи
         article_data = article.model_dump(exclude={'process'})
@@ -345,12 +323,6 @@ async def get_articles(
     page_size: Annotated[int, Query(ge=1, le=100)] = 10,
     session: AsyncSession = Depends(get_db)
 ) -> ArticleListResponse:
-    """
-    Получает список статей с поддержкой пагинации.
-    
-    - **page**: номер страницы (по умолчанию 1)
-    - **page_size**: количество элементов на странице (по умолчанию 10, максимум 100)
-    """
     # Получить общее количество статей
     total_result = await session.execute(select(func.count(Article.id)))
     total = total_result.scalar()
@@ -461,12 +433,6 @@ async def update_article(
     article_update: ArticleUpdate,
     session: AsyncSession = Depends(get_db)
 ) -> ArticleResponse:
-    """
-    Обновляет информацию о статье.
-    
-    - **article_id**: ID статьи
-    - **article_update**: данные для обновления (все поля опциональны)
-    """
     result = await session.execute(select(Article).where(Article.id == article_id))
     article = result.scalar_one_or_none()
     
@@ -503,11 +469,6 @@ async def delete_article(
     article_id: int,
     session: AsyncSession = Depends(get_db)
 ):
-    """
-    Удаляет статью из базы данных.
-    
-    - **article_id**: ID статьи
-    """
     result = await session.execute(select(Article).where(Article.id == article_id))
     article = result.scalar_one_or_none()
     
@@ -542,17 +503,6 @@ async def process_article_for_rag(
     request: ProcessArticleRequest,
     session: AsyncSession = Depends(get_db)
 ) -> ProcessArticleResponse:
-    """
-    Обработка статьи для RAG системы:
-    1. Скачивание PDF с Яндекс Диска
-    2. Извлечение текста из PDF
-    3. Разбиение текста на чанки
-    4. Генерирование embedding-ов с OpenAI
-    5. Сохранение в векторную БД Qdrant
-    
-    - **article_id**: ID статьи в PostgreSQL БД
-    - **filename**: Имя файла на Яндекс Диске
-    """
     try:
         # Проверить что статья существует
         result = await session.execute(select(Article).where(Article.id == article_id))
@@ -591,13 +541,6 @@ async def reprocess_article_for_rag(
     request: ProcessArticleRequest,
     session: AsyncSession = Depends(get_db)
 ) -> ProcessArticleResponse:
-    """
-    Переобработка статьи (удаление старых векторов + новая обработка).
-    Используйте когда нужно обновить embeddings статьи.
-    
-    - **article_id**: ID статьи в PostgreSQL БД
-    - **filename**: Имя файла на Яндекс Диске
-    """
     try:
         # Проверить что статья существует
         result = await session.execute(select(Article).where(Article.id == article_id))
@@ -635,12 +578,6 @@ async def search_all_articles(
     request: SearchRequest,
     session: AsyncSession = Depends(get_db)
 ) -> SearchResponse:
-    """
-    RAG поиск по всему корпусу статей.
-    
-    - **query**: Текстовый запрос на русском языке
-    - **limit**: Максимальное количество результатов (по умолчанию 5)
-    """
     try:
         filtered_article_ids = await _get_filtered_article_ids(request, session)
         if filtered_article_ids is not None and not filtered_article_ids:
@@ -685,13 +622,6 @@ async def search_in_article(
     request: SearchRequest,
     session: AsyncSession = Depends(get_db)
 ) -> SearchResponse:
-    """
-    RAG поиск в конкретной статье.
-    
-    - **article_id**: ID статьи для поиска
-    - **query**: Текстовый запрос на русском языке
-    - **limit**: Максимальное количество результатов (по умолчанию 5)
-    """
     try:
         filtered_article_ids = await _get_filtered_article_ids(request, session)
         if filtered_article_ids is not None and article_id not in filtered_article_ids:
@@ -743,9 +673,6 @@ async def search_in_article(
     description="Получить информацию о Qdrant коллекции"
 )
 async def get_vector_store_stats() -> VectorStoreInfo:
-    """
-    Получить информацию о векторной БД Qdrant (количество документов, векторов и т.д.)
-    """
     try:
         rag_service = await get_rag_service()
         info = await rag_service.get_vector_store_info()
@@ -803,14 +730,6 @@ async def ask_question(
     request: SearchRequest,
     session: AsyncSession = Depends(get_db)
 ):
-    """
-    Полный RAG цикл: поиск + генерация ответа
-    
-    - Ищет релевантные чанки в векторной БД
-    - Добавляет их в контекст
-    - Отправляет вопрос с контекстом в OpenAI
-    - Возвращает развёрнутый ответ с источниками
-    """
     try:
         filtered_article_ids = await _get_filtered_article_ids(request, session)
         if filtered_article_ids is not None and not filtered_article_ids:
